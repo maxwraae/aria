@@ -242,6 +242,68 @@ CORS14=$(curl -s -D- -o /dev/null -X OPTIONS http://localhost:8080/api/objective
 assert_contains "$CORS14" "*" "T14b: OPTIONS response includes Access-Control-Allow-Origin: *"
 
 # ══════════════════════════════════════════════════════════════════
+# Category H: Worker Endpoints
+# ══════════════════════════════════════════════════════════════════
+echo ""
+echo "Category H: Worker Endpoints"
+echo "────────────────────────────"
+
+# T16: GET /api/worker/objectives without machine param returns 400
+STATUS16=$(curl -s -o /dev/null -w '%{http_code}' 'http://localhost:8080/api/worker/objectives')
+assert_eq "$STATUS16" "400" "T16: GET /api/worker/objectives without machine returns 400"
+
+# T17: GET /api/worker/objectives?machine=macbook returns empty array when no matching work
+WORKER17=$(curl -s 'http://localhost:8080/api/worker/objectives?machine=macbook')
+WORKER17_LEN=$(echo "$WORKER17" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null)
+assert_eq "$WORKER17_LEN" "0" "T17: Worker objectives returns empty array when no matching work"
+
+# T18: Create objective with machine=macbook, send message, then worker endpoint returns it
+WORKER_OBJ=$(curl -s -X POST http://localhost:8080/api/objectives \
+  -H 'Content-Type: application/json' \
+  -d '{"objective":"worker test task","parent":"root"}')
+WORKER_OBJ_ID=$(echo "$WORKER_OBJ" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+# Set machine=macbook and insert message directly via DB to avoid engine nudge race
+sqlite3 "$DB" "UPDATE objectives SET machine='macbook' WHERE id='$WORKER_OBJ_ID';"
+WORKER_MSG_ID=$(python3 -c "import uuid; print(uuid.uuid4().hex[:12])")
+WORKER_MSG_TS=$(python3 -c "import time; print(int(time.time()))")
+sqlite3 "$DB" "INSERT INTO inbox (id, objective_id, message, sender, type, created_at) VALUES ('$WORKER_MSG_ID', '$WORKER_OBJ_ID', 'do this work on macbook', 'max', 'message', $WORKER_MSG_TS);"
+WORKER18=$(curl -s 'http://localhost:8080/api/worker/objectives?machine=macbook')
+WORKER18_LEN=$(echo "$WORKER18" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null)
+assert_eq "$WORKER18_LEN" "1" "T18a: Worker endpoint returns 1 objective for machine=macbook"
+WORKER18_HAS_CONTEXT=$(echo "$WORKER18" | python3 -c "import sys,json; items=json.load(sys.stdin); print('YES' if items[0].get('context') else 'NO')" 2>/dev/null)
+assert_eq "$WORKER18_HAS_CONTEXT" "YES" "T18b: Worker endpoint includes assembled context"
+WORKER18_HAS_MSGS=$(echo "$WORKER18" | python3 -c "import sys,json; items=json.load(sys.stdin); print('YES' if len(items[0].get('messages',[])) > 0 else 'NO')" 2>/dev/null)
+assert_eq "$WORKER18_HAS_MSGS" "YES" "T18c: Worker endpoint includes unprocessed messages"
+
+# T19: POST /api/worker/turns/:id/complete updates the objective
+RESP19=$(curl -s -w '\n%{http_code}' -X POST "http://localhost:8080/api/worker/turns/$WORKER_OBJ_ID/complete" \
+  -H 'Content-Type: application/json' \
+  -d '{"result":"work completed successfully"}')
+STATUS19=$(echo "$RESP19" | tail -1)
+BODY19=$(echo "$RESP19" | sed '$d')
+assert_eq "$STATUS19" "200" "T19a: POST /api/worker/turns/:id/complete returns 200"
+OK19=$(echo "$BODY19" | python3 -c "import sys,json; print('YES' if json.load(sys.stdin).get('ok') else 'NO')" 2>/dev/null)
+assert_eq "$OK19" "YES" "T19b: Worker complete returns {ok: true}"
+# Verify objective status changed to needs-input
+OBJ19_STATUS=$(sqlite3 "$DB" "SELECT status FROM objectives WHERE id='$WORKER_OBJ_ID';")
+assert_eq "$OBJ19_STATUS" "needs-input" "T19c: Worker complete sets objective status to needs-input"
+# Verify reply message was inserted
+OBJ19_REPLY=$(sqlite3 "$DB" "SELECT COUNT(*) FROM inbox WHERE objective_id='$WORKER_OBJ_ID' AND type='reply';")
+assert_gt "$OBJ19_REPLY" "0" "T19d: Worker complete inserts reply message in inbox"
+
+# T20: POST /api/worker/turns/nonexistent/complete returns 404
+STATUS20=$(curl -s -o /dev/null -w '%{http_code}' -X POST 'http://localhost:8080/api/worker/turns/nonexistent/complete' \
+  -H 'Content-Type: application/json' \
+  -d '{"result":"test"}')
+assert_eq "$STATUS20" "404" "T20: Worker complete for nonexistent objective returns 404"
+
+# T21: POST /api/worker/turns/:id/complete without result returns 400
+STATUS21=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:8080/api/worker/turns/$WORKER_OBJ_ID/complete" \
+  -H 'Content-Type: application/json' \
+  -d '{}')
+assert_eq "$STATUS21" "400" "T21: Worker complete without result returns 400"
+
+# ══════════════════════════════════════════════════════════════════
 # Category G: Graceful Shutdown
 # ══════════════════════════════════════════════════════════════════
 echo ""

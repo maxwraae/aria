@@ -13,7 +13,10 @@ import {
   updateObjective,
   searchObjectives,
   matchObjectiveByText,
+  getPendingForMachine,
+  updateStatus,
 } from '../db/queries.js';
+import { assembleContext } from '../context/assembler.js';
 import { subscribe, unsubscribe, type StreamCallback } from '../engine/streams.js';
 
 // ── MIME types for static serving ─────────────────────────────────
@@ -256,6 +259,63 @@ export function startServer(
         }));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ routed: false, candidates }));
+        return;
+      }
+
+      // GET /api/worker/objectives?machine=<name>
+      if (method === 'GET' && pathname === '/api/worker/objectives') {
+        const machine = url.searchParams.get('machine') ?? '';
+        if (!machine) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'machine parameter required' }));
+          return;
+        }
+        const pending = getPendingForMachine(db, machine);
+        const results = pending.map(({ objective: obj, messages }) => {
+          const contextPath = assembleContext(db, obj.id);
+          const context = fs.readFileSync(contextPath, 'utf-8');
+          // Clean up temp file
+          try { fs.unlinkSync(contextPath); } catch { /* ignore */ }
+          return {
+            objectiveId: obj.id,
+            objective: obj.objective,
+            context,
+            messages,
+          };
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(results));
+        return;
+      }
+
+      // POST /api/worker/turns/:id/complete
+      const workerCompleteParams = matchRoute(pathname, '/api/worker/turns/:id/complete');
+      if (method === 'POST' && workerCompleteParams) {
+        const body = await parseBody(req);
+        const result = body.result as string;
+        if (!result) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'result required' }));
+          return;
+        }
+        const objectiveId = workerCompleteParams.id;
+        const obj = getObjective(db, objectiveId);
+        if (!obj) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Objective not found' }));
+          return;
+        }
+        // Insert result as a reply message
+        insertMessage(db, {
+          objective_id: objectiveId,
+          message: result,
+          sender: objectiveId,
+          type: 'reply',
+        });
+        // Set status to needs-input (same as output processor does after turn)
+        updateStatus(db, objectiveId, 'needs-input');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
         return;
       }
 
