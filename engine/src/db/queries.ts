@@ -519,6 +519,26 @@ export function getStuckObjectives(
   ).all(cutoff) as Objective[];
 }
 
+export function getStaleObjectives(
+  db: Database.Database,
+  thresholdSeconds: number
+): string[] {
+  const cutoff = now() - thresholdSeconds;
+  const rows = stmt(
+    db,
+    "staleIdle",
+    `SELECT o.id FROM objectives o
+     WHERE o.status = 'idle'
+       AND o.updated_at < ?
+       AND o.parent IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM inbox i
+         WHERE i.objective_id = o.id AND i.turn_id IS NULL
+       )`
+  ).all(cutoff) as { id: string }[];
+  return rows.map((r) => r.id);
+}
+
 // ── Schedules ─────────────────────────────────────────────────────
 
 export interface Schedule {

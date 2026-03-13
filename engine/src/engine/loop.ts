@@ -2,7 +2,9 @@ import Database from 'better-sqlite3';
 import {
   getPendingObjectives,
   getStuckObjectives,
+  getStaleObjectives,
   updateStatus,
+  cascadeAbandon,
   incrementFailCount,
   insertMessage,
   getReadySchedules,
@@ -16,6 +18,10 @@ import { spawnTurn } from './spawn.js';
 const POLL_INTERVAL = 5000; // 5 seconds
 const STUCK_THRESHOLD = 10 * 60; // 10 minutes
 const MAX_FAIL_COUNT = 3;
+const PRUNE_INTERVAL = 60 * 60; // 1 hour between prune sweeps
+const STALE_THRESHOLD_DAYS = 14;
+
+let lastPruneTime = 0;
 
 export function startEngine(db: Database.Database): { nudge: () => void } {
   // Recover objectives left in 'thinking' from a previous engine crash
@@ -55,10 +61,30 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
     }
   }
 
+  function pruneStale() {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    if (nowSeconds - lastPruneTime < PRUNE_INTERVAL) return;
+    lastPruneTime = nowSeconds;
+
+    const thresholdSeconds = STALE_THRESHOLD_DAYS * 24 * 60 * 60;
+    const staleIds = getStaleObjectives(db, thresholdSeconds);
+    for (const id of staleIds) {
+      updateStatus(db, id, 'abandoned');
+      cascadeAbandon(db, id);
+      console.log(`[engine] Pruned stale objective ${id.slice(0, 8)}`);
+    }
+    if (staleIds.length > 0) {
+      console.log(`[engine] Pruned ${staleIds.length} stale objective(s)`);
+    }
+  }
+
   async function poll() {
     try {
       // 0. Fire any ready schedules
       fireReadySchedules();
+
+      // 0.5. Prune stale idle objectives (runs once per hour)
+      pruneStale();
 
       // 1. Get objectives with unprocessed messages
       const pending = getPendingObjectives(db);
