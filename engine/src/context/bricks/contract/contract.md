@@ -120,6 +120,7 @@ communication.
 - aria create "desired state" ["instructions"] [--model <model>]  — new child objective under you; instructions are its first message
 - aria succeed <id> "resolution summary"        — REQUIRED summary: what was achieved and how; only works on your children/descendants
 - aria fail <id> "reason"                       — REQUIRED reason: why it failed; only works on your children/descendants
+- aria reject <id> "feedback"                   — not good enough, try again; sets child back to idle with your feedback; only works on your children/descendants
 - aria wait "reason"                            — you are blocked on something external; uses your own objective ID
 - aria tell <id> "message"                      — message any objective; triggers that objective
 - aria notify "message" --important/--not-important --urgent/--not-urgent  — reach Max directly; BOTH flags required
