@@ -125,11 +125,31 @@ STATUS8=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/a
   -d '{}')
 assert_eq "$STATUS8" "400" "T8: POST /api/objectives/root/message without message body returns 400"
 
-# T9: POST /api/message returns 501 (stub)
-STATUS9=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/message \
+# T9: POST /api/message — no match creates new objective
+RESP9=$(curl -s -w '\n%{http_code}' -X POST http://localhost:8080/api/message \
   -H 'Content-Type: application/json' \
-  -d '{"message":"test"}')
-assert_eq "$STATUS9" "501" "T9: POST /api/message returns 501 (implicit routing stub)"
+  -d '{"message":"unique zebra migration patterns"}')
+STATUS9=$(echo "$RESP9" | tail -1)
+BODY9=$(echo "$RESP9" | sed '$d')
+ROUTED9=$(echo "$BODY9" | python3 -c "import sys,json; d=json.load(sys.stdin); print('YES' if d.get('routed') and d.get('created') else 'NO')" 2>/dev/null)
+assert_eq "$STATUS9" "201" "T9a: POST /api/message with no match returns 201"
+assert_eq "$ROUTED9" "YES" "T9b: POST /api/message with no match returns routed=true, created=true"
+OBJ9_ID=$(echo "$BODY9" | python3 -c "import sys,json; print(json.load(sys.stdin).get('objectiveId',''))" 2>/dev/null)
+assert_gt "${#OBJ9_ID}" "0" "T9c: POST /api/message returns an objectiveId for the new objective"
+
+# T9d: POST /api/message — routes to matching objective
+# Send message matching the objective we just created
+RESP9D=$(curl -s -X POST http://localhost:8080/api/message \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"zebra migration"}')
+ROUTED9D=$(echo "$RESP9D" | python3 -c "import sys,json; d=json.load(sys.stdin); print('YES' if d.get('routed') else 'NO')" 2>/dev/null)
+assert_eq "$ROUTED9D" "YES" "T9d: POST /api/message routes to matching objective"
+
+# T9e: POST /api/message without message body returns 400
+STATUS9E=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/message \
+  -H 'Content-Type: application/json' \
+  -d '{}')
+assert_eq "$STATUS9E" "400" "T9e: POST /api/message without message body returns 400"
 
 # ══════════════════════════════════════════════════════════════════
 # Category D: REST API - Search

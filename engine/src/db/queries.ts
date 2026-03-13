@@ -472,6 +472,41 @@ export function findSimilarResolved(
   ).all(ftsQuery, limit) as SimilarResolved[];
 }
 
+export interface MatchedObjective {
+  id: string;
+  objective: string;
+  description: string | null;
+  status: string;
+  rank: number;
+}
+
+export function matchObjectiveByText(
+  db: Database.Database,
+  text: string
+): MatchedObjective[] {
+  // Tokenize: keep alphanumeric words, join with OR for broad FTS matching
+  const tokens = text
+    .replace(/[^\w\s]/g, "")
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
+  if (tokens.length === 0) return [];
+
+  const ftsQuery = tokens.join(" OR ");
+
+  return stmt(
+    db,
+    "matchObjectiveByText",
+    `SELECT o.id, o.objective, o.description, o.status, fts.rank
+     FROM objectives o
+     JOIN objectives_fts fts ON fts.rowid = o.rowid
+     WHERE objectives_fts MATCH ?
+       AND o.status NOT IN ('resolved', 'failed', 'abandoned')
+       AND o.id != 'root'
+     ORDER BY fts.rank
+     LIMIT 5`
+  ).all(ftsQuery) as MatchedObjective[];
+}
+
 export function getStuckObjectives(
   db: Database.Database,
   thresholdSeconds: number
