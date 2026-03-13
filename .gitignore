@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output (reproducible from source)
+engine/dist/
+surface/dist/
+
+# Database (local state, not code)
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Lock files (reproducible)
+package-lock.json

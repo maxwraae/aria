@@ -1,0 +1,27 @@
+{
+  "name": "aria-engine",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "aria": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/cli/index.ts",
+    "build": "tsc && cp src/context/bricks/persona/persona.md dist/context/bricks/persona/ && cp src/context/bricks/contract/contract.md dist/context/bricks/contract/",
+    "start": "node dist/cli/index.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.0.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "playwright": "^1.58.2",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.18"
+  }
+}
