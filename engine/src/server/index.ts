@@ -12,6 +12,7 @@ import {
   createObjective,
   updateObjective,
   searchObjectives,
+  matchObjectiveByText,
 } from '../db/queries.js';
 import { subscribe, unsubscribe, type StreamCallback } from '../engine/streams.js';
 
@@ -198,8 +199,63 @@ export function startServer(
 
       // POST /api/message - implicit routing (Slice 3)
       if (method === 'POST' && pathname === '/api/message') {
-        res.writeHead(501, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Implicit routing not yet implemented' }));
+        const body = await parseBody(req);
+        const message = body.message as string;
+        if (!message) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'message required' }));
+          return;
+        }
+
+        const matches = matchObjectiveByText(db, message);
+
+        if (matches.length === 0) {
+          // No match — create new objective under root
+          const newObj = createObjective(db, {
+            objective: message,
+            parent: 'root',
+          });
+          insertMessage(db, {
+            objective_id: newObj.id,
+            message,
+            sender: 'max',
+          });
+          nudge();
+          res.writeHead(201, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ routed: true, objectiveId: newObj.id, created: true }));
+          return;
+        }
+
+        // FTS rank is negative (more negative = better match)
+        const topScore = matches[0].rank;
+        const secondScore = matches.length > 1 ? matches[1].rank : 0;
+
+        // High-confidence: top score is significantly better than second
+        // rank is negative, so we check if top is more than 20% better (more negative)
+        const isHighConfidence = matches.length === 1 ||
+          (secondScore !== 0 && Math.abs(topScore) > Math.abs(secondScore) * 1.2);
+
+        if (isHighConfidence) {
+          // Route directly to the best match
+          insertMessage(db, {
+            objective_id: matches[0].id,
+            message,
+            sender: 'max',
+          });
+          nudge();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ routed: true, objectiveId: matches[0].id }));
+          return;
+        }
+
+        // Ambiguous — return candidates for surface to show picker
+        const candidates = matches.map(m => ({
+          id: m.id,
+          objective: m.objective,
+          description: m.description,
+        }));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ routed: false, candidates }));
         return;
       }
 
