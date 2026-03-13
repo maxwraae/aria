@@ -15,6 +15,10 @@ import {
   matchObjectiveByText,
   getPendingForMachine,
   updateStatus,
+  cascadeAbandon,
+  setWaitingOn,
+  clearWaitingOn,
+  setResolutionSummary,
 } from '../db/queries.js';
 import { assembleContext } from '../context/assembler.js';
 import { subscribe, unsubscribe, type StreamCallback } from '../engine/streams.js';
@@ -316,6 +320,171 @@ export function startServer(
         updateStatus(db, objectiveId, 'needs-input');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      // POST /api/objectives/:id/succeed
+      const succeedParams = matchRoute(pathname, '/api/objectives/:id/succeed');
+      if (method === 'POST' && succeedParams) {
+        const body = await parseBody(req);
+        const summary = body.summary as string;
+        if (!summary) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'summary required' }));
+          return;
+        }
+        const obj = getObjective(db, succeedParams.id);
+        if (!obj) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Not found' }));
+          return;
+        }
+        const children = getChildren(db, succeedParams.id);
+        const activeChildren = children.filter(c => ['idle', 'needs-input'].includes(c.status));
+
+        updateStatus(db, succeedParams.id, 'resolved');
+        setResolutionSummary(db, succeedParams.id, summary);
+        cascadeAbandon(db, succeedParams.id);
+
+        insertMessage(db, {
+          objective_id: succeedParams.id,
+          message: summary,
+          sender: 'system',
+          type: 'reply',
+        });
+
+        if (obj.parent) {
+          insertMessage(db, {
+            objective_id: obj.parent,
+            message: `[resolved] ${obj.objective}: ${summary}`,
+            sender: succeedParams.id,
+            type: 'reply',
+          });
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          id: succeedParams.id,
+          objective: obj.objective,
+          status: 'resolved',
+          abandoned_children: activeChildren.length,
+        }));
+        return;
+      }
+
+      // POST /api/objectives/:id/fail
+      const failParams = matchRoute(pathname, '/api/objectives/:id/fail');
+      if (method === 'POST' && failParams) {
+        const body = await parseBody(req);
+        const reason = body.reason as string;
+        if (!reason) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'reason required' }));
+          return;
+        }
+        const obj = getObjective(db, failParams.id);
+        if (!obj) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Not found' }));
+          return;
+        }
+
+        updateStatus(db, failParams.id, 'failed');
+
+        if (obj.parent) {
+          insertMessage(db, {
+            objective_id: obj.parent,
+            message: `[failed] ${obj.objective}: ${reason}`,
+            sender: failParams.id,
+            type: 'reply',
+          });
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: failParams.id, status: 'failed' }));
+        return;
+      }
+
+      // POST /api/objectives/:id/reject
+      const rejectParams = matchRoute(pathname, '/api/objectives/:id/reject');
+      if (method === 'POST' && rejectParams) {
+        const body = await parseBody(req);
+        const feedback = body.feedback as string;
+        if (!feedback) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'feedback required' }));
+          return;
+        }
+        const obj = getObjective(db, rejectParams.id);
+        if (!obj) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Not found' }));
+          return;
+        }
+
+        updateStatus(db, rejectParams.id, 'idle');
+        clearWaitingOn(db, rejectParams.id);
+
+        const caller = (body.caller as string) ?? 'max';
+        insertMessage(db, {
+          objective_id: rejectParams.id,
+          message: feedback,
+          sender: caller,
+          type: 'message',
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: rejectParams.id, status: 'idle' }));
+        return;
+      }
+
+      // POST /api/objectives/:id/wait
+      const waitParams = matchRoute(pathname, '/api/objectives/:id/wait');
+      if (method === 'POST' && waitParams) {
+        const body = await parseBody(req);
+        const reason = body.reason as string;
+        if (!reason) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'reason required' }));
+          return;
+        }
+        const obj = getObjective(db, waitParams.id);
+        if (!obj) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Not found' }));
+          return;
+        }
+
+        setWaitingOn(db, waitParams.id, reason);
+        updateStatus(db, waitParams.id, 'idle');
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: waitParams.id, status: 'idle', waiting_on: reason }));
+        return;
+      }
+
+      // POST /api/notify
+      if (method === 'POST' && pathname === '/api/notify') {
+        const body = await parseBody(req);
+        const message = body.message as string;
+        if (!message) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'message required' }));
+          return;
+        }
+        const sender = (body.sender as string) ?? 'system';
+        const important = body.important as boolean ?? false;
+        const urgent = body.urgent as boolean ?? false;
+
+        insertMessage(db, {
+          objective_id: 'root',
+          message: '[notify] ' + message,
+          sender,
+          type: 'signal',
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, message, important, urgent }));
         return;
       }
 
