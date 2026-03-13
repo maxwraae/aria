@@ -438,6 +438,40 @@ export function getSenderRelation(
   return { relation, label: `${relation}:${shortId} "${sender.objective}"` };
 }
 
+export interface SimilarResolved {
+  id: string;
+  objective: string;
+  resolution_summary: string | null;
+  rank: number;
+}
+
+export function findSimilarResolved(
+  db: Database.Database,
+  queryText: string,
+  limit: number = 3
+): SimilarResolved[] {
+  // Tokenize: keep alphanumeric words, join with OR for broad FTS matching
+  const tokens = queryText
+    .replace(/[^\w\s]/g, "")
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
+  if (tokens.length === 0) return [];
+
+  const ftsQuery = tokens.join(" OR ");
+
+  return stmt(
+    db,
+    "findSimilarResolved",
+    `SELECT o.id, o.objective, o.resolution_summary, fts.rank
+     FROM objectives o
+     JOIN objectives_fts fts ON fts.rowid = o.rowid
+     WHERE objectives_fts MATCH ?
+       AND o.status = 'resolved'
+     ORDER BY fts.rank
+     LIMIT ?`
+  ).all(ftsQuery, limit) as SimilarResolved[];
+}
+
 export function getStuckObjectives(
   db: Database.Database,
   thresholdSeconds: number

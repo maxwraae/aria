@@ -10,6 +10,7 @@ import { assembleContextV2 } from '../context/assembler-v2.js';
 import personaBrick from '../context/bricks/persona/index.js';
 import contractBrick from '../context/bricks/contract/index.js';
 import environmentBrick from '../context/bricks/environment/index.js';
+import similarBrick from '../context/bricks/similar/index.js';
 import { launchTUI } from '../context/tui/index.js';
 import { loadConfig } from '../context/config.js';
 
@@ -633,7 +634,7 @@ function cmdContext(rawArgs: string[]): void {
   const { flags } = parseFlags(rawArgs);
 
   const config = loadConfig();
-  const bricks = [personaBrick, contractBrick, environmentBrick];
+  const bricks = [personaBrick, contractBrick, environmentBrick, similarBrick];
   const result = assembleContextV2(bricks, { config: config as unknown as Record<string, unknown> });
 
   if (flags['dump']) {

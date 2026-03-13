@@ -3,6 +3,7 @@ import fs from "fs";
 import { getContract } from "./layers/contract.js";
 import { getObjectiveContext } from "./layers/objective.js";
 import { getConversationContext } from "./layers/conversation.js";
+import { getSimilarResolvedContext } from "./layers/similar.js";
 
 function getPersona(): string {
   return `# PERSONA
@@ -35,6 +36,7 @@ export function assembleContext(
     getContract(),
     getEnvironment(),
     getObjectiveContext(db, objectiveId),
+    getSimilarResolvedContext(db, objectiveId),
     getConversationContext(db, objectiveId),
   ];
 
