@@ -236,6 +236,164 @@ function CreateObjectiveOverlay({ parentId, onSubmit, onDismiss }: { parentId: s
   );
 }
 
+function EditObjectiveOverlay({ name, description, onSubmit, onDismiss }: { name: string; description: string; onSubmit: (name: string, description: string) => void; onDismiss: () => void }) {
+  const [editName, setEditName] = useState(name);
+  const [editDesc, setEditDesc] = useState(description);
+  const nameRef = useRef<TextInput>(null);
+  const descRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => nameRef.current?.focus(), 50);
+    return () => clearTimeout(t);
+  }, []);
+
+  const handleSubmit = () => {
+    const trimmedName = editName.trim();
+    if (!trimmedName) return;
+    onSubmit(trimmedName, editDesc.trim());
+    onDismiss();
+  };
+
+  return (
+    <>
+      <Pressable
+        onPress={onDismiss}
+        style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(10,10,20,0.12)",
+          backdropFilter: "blur(6px)",
+          WebkitBackdropFilter: "blur(6px)",
+          zIndex: 300,
+          cursor: "default",
+        } as any}
+      />
+      <View
+        style={{
+          position: "fixed",
+          top: "50%", left: "50%",
+          transform: "translate(-50%, -50%)",
+          zIndex: 301,
+          width: "min(440px, 85vw)",
+          animation: "focusIn 200ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards",
+        } as any}
+      >
+        <View style={{
+          backgroundColor: "rgba(255,255,255,0.92)",
+          backdropFilter: "blur(20px) saturate(180%)",
+          WebkitBackdropFilter: "blur(20px) saturate(180%)",
+          borderRadius: 16,
+          borderWidth: 1.5,
+          borderColor: "rgba(255,255,255,0.4)",
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: 8 },
+          shadowOpacity: 0.15,
+          shadowRadius: 32,
+          overflow: "hidden",
+        } as any}>
+          <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 6 }}>
+            <Text style={{
+              fontSize: 13,
+              fontWeight: "500" as const,
+              color: "rgba(0,0,0,0.35)",
+              fontFamily: theme.fonts.sans,
+            }}>Edit objective</Text>
+          </View>
+          <View style={{ paddingHorizontal: 20, paddingBottom: 4 }}>
+            <TextInput
+              ref={nameRef}
+              value={editName}
+              onChangeText={setEditName}
+              placeholder="Objective name"
+              placeholderTextColor="rgba(0,0,0,0.22)"
+              onKeyPress={(e: any) => {
+                if (Platform.OS === "web" && e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
+                  e.preventDefault();
+                  descRef.current?.focus();
+                }
+                if (Platform.OS === "web" && e.nativeEvent.key === "Escape") {
+                  onDismiss();
+                }
+              }}
+              style={{
+                fontSize: 18,
+                fontWeight: "600" as const,
+                color: "#000000",
+                fontFamily: theme.fonts.sans,
+                paddingVertical: 8,
+                ...(Platform.OS === "web" ? { outlineStyle: "none" } : {}),
+              } as any}
+            />
+          </View>
+          <View style={{ paddingHorizontal: 20, paddingBottom: 4 }}>
+            <Text style={{
+              fontSize: 13,
+              fontWeight: "500" as const,
+              color: "rgba(0,0,0,0.35)",
+              fontFamily: theme.fonts.sans,
+              paddingBottom: 4,
+            }}>Description</Text>
+            <TextInput
+              ref={descRef}
+              value={editDesc}
+              onChangeText={setEditDesc}
+              placeholder="Optional description"
+              placeholderTextColor="rgba(0,0,0,0.22)"
+              multiline
+              numberOfLines={3}
+              onKeyPress={(e: any) => {
+                if (Platform.OS === "web" && e.nativeEvent.key === "Escape") {
+                  onDismiss();
+                }
+              }}
+              style={{
+                fontSize: 14,
+                fontWeight: "400" as const,
+                color: "#000000",
+                fontFamily: theme.fonts.sans,
+                paddingVertical: 8,
+                minHeight: 64,
+                ...(Platform.OS === "web" ? { outlineStyle: "none", resize: "none" } : {}),
+              } as any}
+            />
+          </View>
+          <View style={{
+            flexDirection: "row",
+            justifyContent: "flex-end",
+            paddingHorizontal: 20,
+            paddingBottom: 16,
+            paddingTop: 8,
+            gap: 8,
+          }}>
+            <Pressable
+              onPress={onDismiss}
+              style={({ pressed }) => ({
+                paddingHorizontal: 16,
+                paddingVertical: 8,
+                borderRadius: 8,
+                opacity: pressed ? 0.5 : 1,
+              })}
+            >
+              <Text style={{ fontSize: 14, fontWeight: "500" as const, color: "rgba(0,0,0,0.35)", fontFamily: theme.fonts.sans }}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              onPress={handleSubmit}
+              style={({ pressed }) => ({
+                paddingHorizontal: 16,
+                paddingVertical: 8,
+                borderRadius: 8,
+                backgroundColor: "rgba(0,0,0,0.08)",
+                opacity: pressed ? 0.5 : 1,
+              })}
+            >
+              <Text style={{ fontSize: 14, fontWeight: "600" as const, color: "rgba(0,0,0,0.65)", fontFamily: theme.fonts.sans }}>Save</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </>
+  );
+}
+
 function FocusOverlay({ onSend, streamingText }: { onSend: (id: string, text: string) => Promise<void>; streamingText: Map<string, string> }) {
   const { focusedSession, dismissFocus } = useFocus();
   if (!focusedSession || Platform.OS !== "web") return null;
@@ -377,9 +535,7 @@ export default function App() {
 
   const [heroText, setHeroText] = useState("");
   const [createParentId, setCreateParentId] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [editName, setEditName] = useState("");
-  const [editDesc, setEditDesc] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const enterWorkView = useCallback((id: string) => {
     setCurrentId(id);
@@ -408,12 +564,39 @@ export default function App() {
     }
   }, [aria.needsYou.map(i => i.session.id).join(',')]);
 
+  const [searchResults, setSearchResults] = useState<ObjectiveNode[]>([]);
+
+  // Client-side search as user types in hero input
+  useEffect(() => {
+    const q = heroText.trim().toLowerCase();
+    if (q.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    const matches = aria.objectives
+      .filter(o => o.id !== 'root' && o.status !== 'resolved' && o.status !== 'abandoned')
+      .filter(o =>
+        o.objective.toLowerCase().includes(q) ||
+        (o.description ?? '').toLowerCase().includes(q)
+      )
+      .slice(0, 5)
+      .map(o => ({
+        id: o.id,
+        name: o.objective,
+        status: (o.status === 'abandoned' ? 'failed' : o.status) as ObjectiveNode['status'],
+        description: o.description ?? undefined,
+      }));
+    setSearchResults(matches);
+  }, [heroText, aria.objectives]);
+
   const handleHeroSubmit = useCallback(() => {
     const trimmed = heroText.trim();
     if (!trimmed) return;
-    aria.sendMessage('root', trimmed);
     setHeroText("");
-  }, [heroText, aria.sendMessage]);
+    setSearchResults([]);
+    aria.sendMessage('root', trimmed);
+    enterWorkView('root');
+  }, [heroText, aria.sendMessage, enterWorkView]);
 
   const path = (effectiveCurrent && currentId)
     ? (findPathById(aria.tree, currentId) || [effectiveCurrent])
@@ -532,6 +715,32 @@ export default function App() {
                       </View>
                     )}
                   </View>
+                  {/* Search results */}
+                  {searchResults.length > 0 && (
+                    <View style={styles.searchResults}>
+                      {searchResults.map((result) => (
+                        <Pressable
+                          key={result.id}
+                          onPress={() => {
+                            setHeroText("");
+                            setSearchResults([]);
+                            enterWorkView(result.id);
+                          }}
+                          style={({ pressed }) => [styles.searchRow, pressed && { opacity: 0.6 }]}
+                        >
+                          <View style={[styles.searchDot, {
+                            backgroundColor: result.status === 'needs-input' ? 'rgba(0,0,0,0.35)'
+                              : result.status === 'thinking' ? 'hsla(32, 35%, 52%, 1)'
+                              : 'rgba(0,0,0,0.15)',
+                          }]} />
+                          <Text style={styles.searchName} numberOfLines={1}>{result.name}</Text>
+                          {result.description && (
+                            <Text style={styles.searchDesc} numberOfLines={1}>{result.description}</Text>
+                          )}
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
                 </View>
               </View>
 
@@ -645,43 +854,8 @@ export default function App() {
               >
                 {/* Objective section — title, description, actions */}
                 <View style={styles.objectiveSection}>
-                  {editing ? (
-                    <>
-                      <TextInput
-                        autoFocus
-                        value={editName}
-                        onChangeText={setEditName}
-                        style={[styles.objectiveTitle, styles.objectiveTitleInput] as any}
-                        placeholder="Objective name"
-                        placeholderTextColor="rgba(0,0,0,0.22)"
-                        onKeyPress={(e: any) => {
-                          if (Platform.OS === "web" && e.nativeEvent.key === "Escape") {
-                            setEditing(false);
-                          }
-                        }}
-                      />
-                      <TextInput
-                        value={editDesc}
-                        onChangeText={setEditDesc}
-                        style={[styles.objectiveDescription, styles.objectiveDescInput, { maxWidth: 640 }] as any}
-                        placeholder="Add a description..."
-                        placeholderTextColor="rgba(0,0,0,0.22)"
-                        multiline
-                        onKeyPress={(e: any) => {
-                          if (Platform.OS === "web" && e.nativeEvent.key === "Escape") {
-                            setEditing(false);
-                          }
-                        }}
-                      />
-                    </>
-                  ) : (
-                    <>
-                      <Text style={styles.objectiveTitle}>{effectiveCurrent?.name ?? ""}</Text>
-                      <Text style={[styles.objectiveDescription, { maxWidth: 640 }]}>
-                        {effectiveCurrent?.description || "No description"}
-                      </Text>
-                    </>
-                  )}
+                  <Text style={styles.objectiveTitle}>{effectiveCurrent?.name ?? ""}</Text>
+                  <Text style={[styles.objectiveDescription, { maxWidth: 640 }]}>{effectiveCurrent?.description || "No description"}</Text>
                   <View style={styles.actionButtons}>
                     <GlassButton size={38} onPress={() => {
                       if (currentId) console.log("resolve", currentId);
@@ -689,24 +863,9 @@ export default function App() {
                       <Text style={styles.actionButtonIcon}>{"\u2713"}</Text>
                     </GlassButton>
                     <GlassButton size={38} onPress={() => {
-                      if (!currentId) return;
-                      if (editing) {
-                        const nameChanged = editName.trim() !== (effectiveCurrent?.name ?? "");
-                        const descChanged = editDesc.trim() !== (effectiveCurrent?.description ?? "");
-                        if (nameChanged || descChanged) {
-                          const fields: { objective?: string; description?: string } = {};
-                          if (nameChanged) fields.objective = editName.trim();
-                          if (descChanged) fields.description = editDesc.trim();
-                          aria.updateObjective(currentId, fields);
-                        }
-                        setEditing(false);
-                      } else {
-                        setEditName(effectiveCurrent?.name ?? "");
-                        setEditDesc(effectiveCurrent?.description ?? "");
-                        setEditing(true);
-                      }
+                      if (currentId) setEditingId(currentId);
                     }}>
-                      <Text style={styles.actionButtonIcon}>{editing ? "\u2713" : "\u270E"}</Text>
+                      <Text style={styles.actionButtonIcon}>{"\u270E"}</Text>
                     </GlassButton>
                     <GlassButton size={38} onPress={() => {
                       if (currentId) setCreateParentId(currentId);
@@ -750,6 +909,26 @@ export default function App() {
             onDismiss={() => setCreateParentId(null)}
           />
         )}
+        {editingId && (() => {
+          const node = findById(aria.tree, editingId);
+          return (
+            <EditObjectiveOverlay
+              name={node?.name ?? ""}
+              description={node?.description ?? ""}
+              onSubmit={(newName, newDesc) => {
+                const nameChanged = newName !== (node?.name ?? "");
+                const descChanged = newDesc !== (node?.description ?? "");
+                if (nameChanged || descChanged) {
+                  const fields: { objective?: string; description?: string } = {};
+                  if (nameChanged) fields.objective = newName;
+                  if (descChanged) fields.description = newDesc;
+                  aria.updateObjective(editingId, fields);
+                }
+              }}
+              onDismiss={() => setEditingId(null)}
+            />
+          );
+        })()}
       </>
     </FocusProvider>
   );
@@ -919,6 +1098,51 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
 
+  // ── Search results ──
+  searchResults: {
+    width: "100%",
+    backgroundColor: "rgba(255,255,255,0.72)",
+    ...(Platform.OS === "web" ? {
+      backdropFilter: "blur(20px) saturate(180%)",
+      WebkitBackdropFilter: "blur(20px) saturate(180%)",
+    } : {}),
+    borderRadius: 14,
+    marginTop: 8,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+  } as any,
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    gap: 10,
+    ...(Platform.OS === "web" ? { cursor: "pointer" } : {}),
+  } as any,
+  searchDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  searchName: {
+    fontSize: 14,
+    fontWeight: "500" as const,
+    color: "rgba(0,0,0,0.75)",
+    fontFamily: theme.fonts.sans,
+    flexShrink: 1,
+  },
+  searchDesc: {
+    fontSize: 13,
+    fontWeight: "400" as const,
+    color: "rgba(0,0,0,0.35)",
+    fontFamily: theme.fonts.sans,
+    flexShrink: 1,
+    marginLeft: 4,
+  },
+
   // ── Content (cards) ──
   contentOuter: {
     ...(Platform.OS === "web"
@@ -968,18 +1192,12 @@ const styles = StyleSheet.create({
     fontFamily: theme.fonts.sans,
     letterSpacing: -0.5,
   },
-  objectiveTitleInput: {
-    ...(Platform.OS === "web" ? { outlineStyle: "none", borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.08)", paddingBottom: 4 } : {}),
-  },
   objectiveDescription: {
     fontSize: 16,
     fontWeight: "400" as const,
     lineHeight: 24,
     color: "rgba(22,18,14,0.65)",
     fontFamily: theme.fonts.sans,
-  },
-  objectiveDescInput: {
-    ...(Platform.OS === "web" ? { outlineStyle: "none", borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.08)", paddingBottom: 4, minHeight: 48 } : {}),
   },
 
   // ── Card grid ──
