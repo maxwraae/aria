@@ -5,7 +5,11 @@ import {
   updateStatus,
   incrementFailCount,
   insertMessage,
+  getReadySchedules,
+  deleteSchedule,
+  bumpSchedule,
 } from '../db/queries.js';
+import { parseInterval } from '../cli/parse-interval.js';
 import { isMaxActive, atConcurrencyLimit } from './concurrency.js';
 import { spawnTurn } from './spawn.js';
 
@@ -27,8 +31,35 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
   console.log('[engine] Poll interval: 5s, Max concurrent: 3');
   console.log('[engine] Waiting for messages...');
 
+  function fireReadySchedules() {
+    const ready = getReadySchedules(db);
+    for (const schedule of ready) {
+      insertMessage(db, {
+        objective_id: schedule.objective_id,
+        message: schedule.message,
+        sender: 'system',
+        type: 'message',
+      });
+      console.log(`[engine] Fired schedule ${schedule.id.slice(0, 8)} → ${schedule.objective_id.slice(0, 8)}`);
+
+      if (schedule.interval) {
+        const seconds = parseInterval(schedule.interval);
+        if (seconds && seconds > 0) {
+          bumpSchedule(db, schedule.id, seconds);
+        } else {
+          deleteSchedule(db, schedule.id);
+        }
+      } else {
+        deleteSchedule(db, schedule.id);
+      }
+    }
+  }
+
   async function poll() {
     try {
+      // 0. Fire any ready schedules
+      fireReadySchedules();
+
       // 1. Get objectives with unprocessed messages
       const pending = getPendingObjectives(db);
       const maxActive = isMaxActive(db);

@@ -518,3 +518,72 @@ export function getStuckObjectives(
     "SELECT * FROM objectives WHERE status = 'thinking' AND updated_at < ?"
   ).all(cutoff) as Objective[];
 }
+
+// ── Schedules ─────────────────────────────────────────────────────
+
+export interface Schedule {
+  id: string;
+  objective_id: string;
+  message: string;
+  interval: string | null;
+  next_at: number;
+  created_at: number;
+}
+
+export function createSchedule(
+  db: Database.Database,
+  objectiveId: string,
+  message: string,
+  intervalStr: string | null,
+  nextAt: number
+): Schedule {
+  const id = generateId();
+  const ts = now();
+
+  stmt(
+    db,
+    "insertSchedule",
+    `INSERT INTO schedules (id, objective_id, message, interval, next_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, objectiveId, message, intervalStr, nextAt, ts);
+
+  return stmt(db, "getSchedule", "SELECT * FROM schedules WHERE id = ?").get(id) as Schedule;
+}
+
+export function getReadySchedules(db: Database.Database): Schedule[] {
+  const ts = now();
+  return stmt(
+    db,
+    "getReadySchedules",
+    "SELECT * FROM schedules WHERE next_at <= ?"
+  ).all(ts) as Schedule[];
+}
+
+export function deleteSchedule(db: Database.Database, id: string): void {
+  stmt(db, "deleteSchedule", "DELETE FROM schedules WHERE id = ?").run(id);
+}
+
+export function bumpSchedule(db: Database.Database, id: string, intervalSeconds: number): void {
+  const ts = now();
+  const nextAt = ts + intervalSeconds;
+  stmt(
+    db,
+    "bumpSchedule",
+    "UPDATE schedules SET next_at = ? WHERE id = ?"
+  ).run(nextAt, id);
+}
+
+export function listSchedules(db: Database.Database, objectiveId?: string): Schedule[] {
+  if (objectiveId) {
+    return stmt(
+      db,
+      "listSchedulesByObjective",
+      "SELECT * FROM schedules WHERE objective_id = ? ORDER BY next_at ASC"
+    ).all(objectiveId) as Schedule[];
+  }
+  return stmt(
+    db,
+    "listAllSchedules",
+    "SELECT * FROM schedules ORDER BY next_at ASC"
+  ).all() as Schedule[];
+}

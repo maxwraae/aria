@@ -146,6 +146,26 @@ export const commands: Record<string, CommandDef> = {
     scope: "none",
     description: "Show conversation for an objective",
   },
+  schedule: {
+    name: "schedule",
+    syntax: 'aria schedule <objective_id> "message" --interval <interval>',
+    args: [
+      { name: "objective_id", required: true, type: "string", positional: true },
+      { name: "message", required: true, type: "string", positional: true },
+      { name: "interval", required: false, type: "string" },
+    ],
+    scope: "none",
+    description: "Create a schedule to send a message to an objective at intervals (5s, 1m, 1h, 1d)",
+  },
+  schedules: {
+    name: "schedules",
+    syntax: "aria schedules [objective_id]",
+    args: [
+      { name: "objective_id", required: false, type: "string", positional: true },
+    ],
+    scope: "none",
+    description: "List active schedules, optionally filtered by objective",
+  },
 };
 
 // ── Validation functions ───────────────────────────────────────────

@@ -709,6 +709,73 @@ assert_contains "$ERR_WAIT" "no ARIA_OBJECTIVE_ID set" "T57: Wait without ARIA_O
 assert_gt "$EXIT_WAIT" "0" "T57b: Wait without ARIA_OBJECTIVE_ID exits non-zero"
 
 # ══════════════════════════════════════════════════════════════════
+# Category J: Schedules
+# Validates the schedule system: creating schedules, listing them,
+# firing ready schedules (one-time and recurring), and bumping next_at.
+# ══════════════════════════════════════════════════════════════════
+echo ""
+echo "Category J: Schedules"
+echo "────────────────────────────"
+
+# Create a fresh objective for schedule tests
+OUT_J=$($ARIA create "Schedule test objective" 2>&1)
+IDJ=$(echo "$OUT_J" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+# Test: Schedule creation works
+OUT_SC=$($ARIA schedule "$IDJ" "check in" --interval 1h 2>&1)
+IDSC=$(echo "$OUT_SC" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+if [[ -n "$IDSC" ]]; then
+  SC_MSG=$(sql "SELECT message FROM schedules WHERE id='$IDSC';")
+  SC_INT=$(sql "SELECT interval FROM schedules WHERE id='$IDSC';")
+  assert_eq "$SC_MSG" "check in" "T63: Schedule creation stores the correct message"
+  assert_eq "$SC_INT" "1h" "T64: Schedule creation stores the interval string"
+else
+  fail "T63: Schedule creation stores the correct message (could not parse id)"
+  fail "T64: Schedule creation stores the interval string (could not parse id)"
+fi
+
+# Test: Schedule listing works
+OUT_SL=$($ARIA schedules "$IDJ" 2>&1)
+FOUND_SL=$(echo "$OUT_SL" | python3 -c "import sys,json; ids=[s['id'] for s in json.load(sys.stdin)]; print('YES' if '$IDSC' in ids else 'NO')" 2>/dev/null)
+assert_eq "$FOUND_SL" "YES" "T65: Schedule listing returns created schedule"
+
+# Test: Schedule listing without filter shows all
+OUT_SL_ALL=$($ARIA schedules 2>&1)
+FOUND_SL_ALL=$(echo "$OUT_SL_ALL" | python3 -c "import sys,json; ids=[s['id'] for s in json.load(sys.stdin)]; print('YES' if '$IDSC' in ids else 'NO')" 2>/dev/null)
+assert_eq "$FOUND_SL_ALL" "YES" "T66: Schedule listing without filter includes all schedules"
+
+# Test: One-time schedule fires and gets deleted
+OUT_J2=$($ARIA create "One-time schedule target" 2>&1)
+IDJ2=$(echo "$OUT_J2" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+PAST_TS_J=$(($(date +%s) - 60))
+sql "INSERT INTO schedules (id, objective_id, message, interval, next_at, created_at) VALUES ('test-onetime', '$IDJ2', 'one-time ping', NULL, $PAST_TS_J, $PAST_TS_J);"
+
+# Fire ready schedules via test helper
+npx tsx test-fire-schedules.ts > /dev/null 2>&1
+
+# Check one-time was deleted
+ONETIME_EXISTS=$(sql "SELECT COUNT(*) FROM schedules WHERE id='test-onetime';")
+ONETIME_MSG=$(sql "SELECT COUNT(*) FROM inbox WHERE objective_id='$IDJ2' AND message='one-time ping';")
+assert_eq "$ONETIME_EXISTS" "0" "T67: One-time schedule is deleted after firing"
+assert_gt "$ONETIME_MSG" "0" "T68: One-time schedule inserts message into target inbox"
+
+# Test: Recurring schedule fires and bumps next_at
+OUT_J3=$($ARIA create "Recurring schedule target" 2>&1)
+IDJ3=$(echo "$OUT_J3" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+PAST_TS_J3=$(($(date +%s) - 60))
+sql "INSERT INTO schedules (id, objective_id, message, interval, next_at, created_at) VALUES ('test-recurring', '$IDJ3', 'recurring ping', '1h', $PAST_TS_J3, $PAST_TS_J3);"
+
+npx tsx test-fire-schedules.ts > /dev/null 2>&1
+
+RECURRING_EXISTS=$(sql "SELECT COUNT(*) FROM schedules WHERE id='test-recurring';")
+RECURRING_NEXT=$(sql "SELECT next_at FROM schedules WHERE id='test-recurring';")
+RECURRING_MSG=$(sql "SELECT COUNT(*) FROM inbox WHERE objective_id='$IDJ3' AND message='recurring ping';")
+CURRENT_TS=$(date +%s)
+assert_eq "$RECURRING_EXISTS" "1" "T69: Recurring schedule still exists after firing"
+assert_gt "$RECURRING_NEXT" "$CURRENT_TS" "T70: Recurring schedule next_at was bumped to the future"
+assert_gt "$RECURRING_MSG" "0" "T71: Recurring schedule inserts message into target inbox"
+
+# ══════════════════════════════════════════════════════════════════
 echo ""
 echo "========================"
 echo "  $PASS passed, $FAIL failed (of $TOTAL)"

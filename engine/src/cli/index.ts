@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 import { initDb } from '../db/schema.js';
-import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation } from '../db/queries.js';
+import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation, createSchedule, listSchedules } from '../db/queries.js';
 import { startEngine } from '../engine/loop.js';
 import { startServer } from '../server/index.js';
 import { validateCreate, validateSucceed, validateFail, validateReject, validateWait, validateTell, validateNotify } from '../commands/registry.js';
 import type { Objective, InboxMessage } from '../db/queries.js';
+import { parseInterval } from './parse-interval.js';
 import { assembleContextV2 } from '../context/assembler-v2.js';
 import personaBrick from '../context/bricks/persona/index.js';
 import contractBrick from '../context/bricks/contract/index.js';
@@ -84,6 +85,8 @@ Commands:
   wait "reason"                                          Set current objective to waiting
   tell <id> "message"                                    Send message to any objective
   notify "message" --important/--not-important --urgent/--not-urgent  Notify Max directly
+  schedule <id> "message" --interval <interval>           Create a schedule (5s, 1m, 1h, 1d)
+  schedules [objective_id]                               List active schedules
   find "query"                                           Search objectives
   engine                                                 Start the engine
   context --dump                                         Print assembled context
@@ -667,6 +670,85 @@ function cmdContext(rawArgs: string[]): void {
   launchTUI(result, bricks, config);
 }
 
+function cmdSchedule(rawArgs: string[]): void {
+  const { positional, flags } = parseFlags(rawArgs);
+  const objectiveId = positional[0];
+  const message = positional[1];
+  const intervalStr = flags['interval'] as string | undefined;
+
+  if (!objectiveId || !message) {
+    console.error('Usage: aria schedule <objective_id> "message" --interval <interval>');
+    process.exit(1);
+  }
+
+  const db = initDb();
+  const obj = getObjective(db, objectiveId);
+  if (!obj) {
+    console.error(`Objective not found: ${objectiveId}`);
+    db.close();
+    process.exit(1);
+  }
+
+  let intervalSeconds: number | null = null;
+  if (intervalStr) {
+    intervalSeconds = parseInterval(intervalStr);
+    if (intervalSeconds === null) {
+      console.error(`Invalid interval format: ${intervalStr}. Use: 5s, 1m, 1h, 1d`);
+      db.close();
+      process.exit(1);
+    }
+  }
+
+  const nextAt = Math.floor(Date.now() / 1000) + (intervalSeconds ?? 0);
+  const schedule = createSchedule(db, objectiveId, message, intervalStr ?? null, nextAt);
+
+  if (isTTY) {
+    const shortId = schedule.id.slice(0, 8);
+    const objShort = objectiveId.slice(0, 8);
+    const intervalLabel = intervalStr ? ` every ${intervalStr}` : ' (one-time)';
+    console.log(`Scheduled: ${color.cyan(shortId)} → ${color.dim(objShort)}${intervalLabel} "${message}"`);
+  } else {
+    console.log(JSON.stringify(schedule, null, 2));
+  }
+
+  db.close();
+}
+
+function cmdSchedules(rawArgs: string[]): void {
+  const objectiveId = rawArgs[0] || undefined;
+
+  const db = initDb();
+
+  if (objectiveId) {
+    const obj = getObjective(db, objectiveId);
+    if (!obj) {
+      console.error(`Objective not found: ${objectiveId}`);
+      db.close();
+      process.exit(1);
+    }
+  }
+
+  const schedules = listSchedules(db, objectiveId);
+
+  if (isTTY) {
+    if (schedules.length === 0) {
+      console.log(color.dim('No active schedules.'));
+    } else {
+      for (const s of schedules) {
+        const shortId = s.id.slice(0, 8);
+        const objShort = s.objective_id.slice(0, 8);
+        const nextAtStr = formatTimestamp(s.next_at);
+        const intervalLabel = s.interval ? ` every ${s.interval}` : ' (one-time)';
+        console.log(`${color.cyan(shortId)} → ${color.dim(objShort)}${intervalLabel}  next: ${nextAtStr}  "${s.message}"`);
+      }
+    }
+  } else {
+    console.log(JSON.stringify(schedules, null, 2));
+  }
+
+  db.close();
+}
+
 // ── Dispatch ──────────────────────────────────────────────────────
 
 const command = process.argv[2];
@@ -722,6 +804,14 @@ switch (command) {
 
   case 'notify':
     cmdNotify(args);
+    break;
+
+  case 'schedule':
+    cmdSchedule(args);
+    break;
+
+  case 'schedules':
+    cmdSchedules(args);
     break;
 
   case 'find':
