@@ -427,6 +427,20 @@ export function getLastMaxMessageTime(db: Database.Database): number | null {
   return row.latest;
 }
 
+export function getDeepWorkCount(db: Database.Database, cutoff: number): number {
+  const row = stmt(
+    db,
+    "deepWorkCount",
+    `SELECT MAX(cnt) as max_count FROM (
+       SELECT objective_id, COUNT(*) as cnt
+       FROM inbox
+       WHERE sender = 'max' AND created_at >= ?
+       GROUP BY objective_id
+     )`
+  ).get(cutoff) as { max_count: number | null };
+  return row.max_count ?? 0;
+}
+
 export type SenderRelation = 'max' | 'parent' | 'child' | 'sibling' | 'other' | 'system';
 
 export interface SenderTag {

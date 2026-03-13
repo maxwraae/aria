@@ -4,6 +4,7 @@ import { initDb } from '../db/schema.js';
 import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation, createSchedule, listSchedules } from '../db/queries.js';
 import { startEngine } from '../engine/loop.js';
 import { startServer } from '../server/index.js';
+import { isDeepWork } from '../engine/concurrency.js';
 import { validateCreate, validateSucceed, validateFail, validateReject, validateWait, validateTell, validateNotify } from '../commands/registry.js';
 import type { Objective, InboxMessage } from '../db/queries.js';
 import { parseInterval } from './parse-interval.js';
@@ -597,6 +598,14 @@ function cmdNotify(rawArgs: string[]): void {
 
   if (!isTTY) {
     console.log(JSON.stringify({ message, important, urgent }, null, 2));
+  }
+
+  // Check deep work state — suppress non-urgent notifications when Max is focused
+  const deepWork = isDeepWork(db);
+  if (deepWork && !urgent) {
+    console.log('[NOTIFY] Suppressed (deep work detected, non-urgent)');
+    db.close();
+    return;
   }
 
   // Fire-and-forget macOS notification via terminal-notifier
