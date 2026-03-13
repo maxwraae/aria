@@ -49,6 +49,14 @@ const BREATHE_CSS = `
 @keyframes cardSettle {
   0%   { background-color: var(--card-breathe-on); }
   100% { background-color: var(--card-breathe-off); }
+}
+@keyframes heroFadeOut {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-12px); }
+}
+@keyframes chatFadeIn {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
 }`;
 
 function useTimeOfDay() {
@@ -534,6 +542,7 @@ export default function App() {
   }, [fadeAnim, slideAnim, pushUrl]);
 
   const [heroText, setHeroText] = useState("");
+  const [homeChat, setHomeChat] = useState(false);
   const [createParentId, setCreateParentId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -594,9 +603,10 @@ export default function App() {
     if (!trimmed) return;
     setHeroText("");
     setSearchResults([]);
+    aria.loadConversation('root');
     aria.sendMessage('root', trimmed);
-    enterWorkView('root');
-  }, [heroText, aria.sendMessage, enterWorkView]);
+    setHomeChat(true);
+  }, [heroText, aria.loadConversation, aria.sendMessage]);
 
   const path = (effectiveCurrent && currentId)
     ? (findPathById(aria.tree, currentId) || [effectiveCurrent])
@@ -677,79 +687,98 @@ export default function App() {
               </View>
             </View>
 
-            {/* Scrollable home content */}
-            <ScrollView
-              style={styles.homeScroll}
-              contentContainerStyle={styles.homeScrollContent}
-              showsVerticalScrollIndicator={false}
-            >
-              {/* Hero — input at center */}
-              <View style={styles.heroContainer}>
-                <View style={styles.heroInner}>
-                  <Text style={[styles.heroGreeting, { color: tod.textColor }]}>What are you working on?</Text>
-                  <View style={styles.heroInputWrapper}>
-                    <TextInput
-                      style={styles.heroInput}
-                      value={heroText}
-                      onChangeText={setHeroText}
-                      placeholder="Start something new..."
-                      placeholderTextColor="rgba(0,0,0,0.22)"
-                      onKeyPress={(e: any) => {
-                        if (Platform.OS === "web" && e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
-                          e.preventDefault();
-                          handleHeroSubmit();
-                        }
-                      }}
-                      // @ts-ignore web-only
-                      enterKeyHint="send"
-                    />
-                    {heroText.trim().length > 0 ? (
-                      <Pressable onPress={handleHeroSubmit} style={({ pressed }) => [styles.heroSendBtn, pressed && { opacity: 0.5 }]}>
-                        <Text style={styles.heroSendArrow}>{"\u2191"}</Text>
-                      </Pressable>
-                    ) : (
-                      <View style={styles.heroWaveform}>
-                        {[5, 11, 8, 13, 6].map((h, i) => (
-                          <View key={i} style={{ width: 2, height: h, borderRadius: 1.5, backgroundColor: "rgba(0,0,0,0.25)" }} />
+            {homeChat ? (
+              /* ── Home chat mode: hero area replaced by root ChatCard ── */
+              <View style={styles.homeChatContainer as any}>
+                <Pressable
+                  onPress={() => setHomeChat(false)}
+                  style={({ pressed }) => [styles.homeChatDismiss as any, pressed && { opacity: 0.5 }]}
+                >
+                  <Text style={{ color: tod.textColor, fontSize: 14, fontFamily: theme.fonts.sans, fontWeight: "400" as const }}>{"\u2190"}</Text>
+                </Pressable>
+                <ChatCard
+                  session={aria.getSession('root')}
+                  scrollEnabled={true}
+                  onSend={(text) => aria.sendMessage('root', text)}
+                  streamingText={aria.streamingText.get('root')}
+                  style={{ flex: 1, maxWidth: 640, width: "100%" } as any}
+                />
+              </View>
+            ) : (
+              /* ── Normal home: scrollable hero + strips ── */
+              <ScrollView
+                style={styles.homeScroll}
+                contentContainerStyle={styles.homeScrollContent}
+                showsVerticalScrollIndicator={false}
+              >
+                {/* Hero — input at center */}
+                <View style={styles.heroContainer}>
+                  <View style={styles.heroInner}>
+                    <Text style={[styles.heroGreeting, { color: tod.textColor }]}>What are you working on?</Text>
+                    <View style={styles.heroInputWrapper}>
+                      <TextInput
+                        style={styles.heroInput}
+                        value={heroText}
+                        onChangeText={setHeroText}
+                        placeholder="Start something new..."
+                        placeholderTextColor="rgba(0,0,0,0.22)"
+                        onKeyPress={(e: any) => {
+                          if (Platform.OS === "web" && e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
+                            e.preventDefault();
+                            handleHeroSubmit();
+                          }
+                        }}
+                        // @ts-ignore web-only
+                        enterKeyHint="send"
+                      />
+                      {heroText.trim().length > 0 ? (
+                        <Pressable onPress={handleHeroSubmit} style={({ pressed }) => [styles.heroSendBtn, pressed && { opacity: 0.5 }]}>
+                          <Text style={styles.heroSendArrow}>{"\u2191"}</Text>
+                        </Pressable>
+                      ) : (
+                        <View style={styles.heroWaveform}>
+                          {[5, 11, 8, 13, 6].map((h, i) => (
+                            <View key={i} style={{ width: 2, height: h, borderRadius: 1.5, backgroundColor: "rgba(0,0,0,0.25)" }} />
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                    {/* Search results */}
+                    {searchResults.length > 0 && (
+                      <View style={styles.searchResults}>
+                        {searchResults.map((result) => (
+                          <Pressable
+                            key={result.id}
+                            onPress={() => {
+                              setHeroText("");
+                              setSearchResults([]);
+                              enterWorkView(result.id);
+                            }}
+                            style={({ pressed }) => [styles.searchRow, pressed && { opacity: 0.6 }]}
+                          >
+                            <View style={[styles.searchDot, {
+                              backgroundColor: result.status === 'needs-input' ? 'rgba(0,0,0,0.35)'
+                                : result.status === 'thinking' ? 'hsla(32, 35%, 52%, 1)'
+                                : 'rgba(0,0,0,0.15)',
+                            }]} />
+                            <Text style={styles.searchName} numberOfLines={1}>{result.name}</Text>
+                            {result.description && (
+                              <Text style={styles.searchDesc} numberOfLines={1}>{result.description}</Text>
+                            )}
+                          </Pressable>
                         ))}
                       </View>
                     )}
                   </View>
-                  {/* Search results */}
-                  {searchResults.length > 0 && (
-                    <View style={styles.searchResults}>
-                      {searchResults.map((result) => (
-                        <Pressable
-                          key={result.id}
-                          onPress={() => {
-                            setHeroText("");
-                            setSearchResults([]);
-                            enterWorkView(result.id);
-                          }}
-                          style={({ pressed }) => [styles.searchRow, pressed && { opacity: 0.6 }]}
-                        >
-                          <View style={[styles.searchDot, {
-                            backgroundColor: result.status === 'needs-input' ? 'rgba(0,0,0,0.35)'
-                              : result.status === 'thinking' ? 'hsla(32, 35%, 52%, 1)'
-                              : 'rgba(0,0,0,0.15)',
-                          }]} />
-                          <Text style={styles.searchName} numberOfLines={1}>{result.name}</Text>
-                          {result.description && (
-                            <Text style={styles.searchDesc} numberOfLines={1}>{result.description}</Text>
-                          )}
-                        </Pressable>
-                      ))}
-                    </View>
-                  )}
                 </View>
-              </View>
 
-              {/* Needs You strip */}
-              <NeedsYouStrip items={aria.needsYou} onNavigate={(id) => enterWorkView(id)} onExpand={enterNeedsYou} headerColor={tod.textColor} onSend={aria.sendMessage} streamingText={aria.streamingText} />
+                {/* Needs You strip */}
+                <NeedsYouStrip items={aria.needsYou} onNavigate={(id) => enterWorkView(id)} onExpand={enterNeedsYou} headerColor={tod.textColor} onSend={aria.sendMessage} streamingText={aria.streamingText} />
 
-              {/* Recent Work strip */}
-              <RecentWorkStrip items={aria.recentWork} onNavigate={(id) => enterWorkView(id)} headerColor={tod.textColor} />
-            </ScrollView>
+                {/* Recent Work strip */}
+                <RecentWorkStrip items={aria.recentWork} onNavigate={(id) => enterWorkView(id)} headerColor={tod.textColor} />
+              </ScrollView>
+            )}
           </View>
         )}
         {view === "needs-you" && (
@@ -1097,6 +1126,28 @@ const styles = StyleSheet.create({
     height: 38,
     paddingHorizontal: 10,
   },
+
+  // ── Home chat mode ──
+  homeChatContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "flex-start",
+    width: "100%",
+    ...(Platform.OS === "web" ? {
+      height: `calc(100vh - ${theme.layout.headerH}px)`,
+      marginTop: theme.layout.headerH,
+      animation: "chatFadeIn 250ms ease-out both",
+    } : {}),
+  } as any,
+  homeChatDismiss: {
+    alignSelf: "center",
+    maxWidth: 640,
+    width: "100%",
+    paddingHorizontal: 8,
+    paddingTop: 12,
+    paddingBottom: 4,
+    ...(Platform.OS === "web" ? { cursor: "pointer" } : {}),
+  } as any,
 
   // ── Search results ──
   searchResults: {

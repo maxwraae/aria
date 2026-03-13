@@ -15,6 +15,7 @@ export interface Objective {
   urgent: number;
   model: string;
   cwd: string | null;
+  machine: string | null;
   fail_count: number;
   created_at: number;
   updated_at: number;
@@ -66,6 +67,7 @@ export function createObjective(
     parent?: string;
     model?: string;
     cwd?: string;
+    machine?: string;
   }
 ): Objective {
   const id = generateId();
@@ -74,13 +76,14 @@ export function createObjective(
   const parent = opts.parent ?? null;
   const model = opts.model ?? "sonnet";
   const cwd = opts.cwd ?? null;
+  const machine = opts.machine ?? null;
 
   stmt(
     db,
     "insertObjective",
-    `INSERT INTO objectives (id, objective, description, parent, status, model, cwd, fail_count, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'idle', ?, ?, 0, ?, ?)`
-  ).run(id, opts.objective, description, parent, model, cwd, ts, ts);
+    `INSERT INTO objectives (id, objective, description, parent, status, model, cwd, machine, fail_count, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'idle', ?, ?, ?, 0, ?, ?)`
+  ).run(id, opts.objective, description, parent, model, cwd, machine, ts, ts);
 
   stmt(
     db,
@@ -340,6 +343,29 @@ export function getPendingObjectives(db: Database.Database): Objective[] {
        AND o.status IN ('idle', 'needs-input')
      ORDER BY o.urgent DESC, o.important DESC, o.created_at ASC`
   ).all() as Objective[];
+}
+
+// ── Worker queries ────────────────────────────────────────────────
+
+export function getPendingForMachine(
+  db: Database.Database,
+  machine: string
+): { objective: Objective; messages: InboxMessage[] }[] {
+  const objectives = stmt(
+    db,
+    "getPendingForMachine",
+    `SELECT DISTINCT o.* FROM objectives o
+     JOIN inbox i ON i.objective_id = o.id
+     WHERE i.turn_id IS NULL
+       AND o.machine = ?
+       AND o.status IN ('idle', 'needs-input')
+     ORDER BY o.urgent DESC, o.important DESC, o.created_at ASC`
+  ).all(machine) as Objective[];
+
+  return objectives.map((obj) => ({
+    objective: obj,
+    messages: getUnprocessedMessages(db, obj.id),
+  }));
 }
 
 // ── Turns ──────────────────────────────────────────────────────────
