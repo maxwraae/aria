@@ -658,6 +658,48 @@ $ARIA succeed "$IDRS" "test summary stored correctly" > /dev/null 2>&1
 RS_VALUE=$(sql "SELECT resolution_summary FROM objectives WHERE id='$IDRS';")
 assert_eq "$RS_VALUE" "test summary stored correctly" "T56: After succeed, resolution_summary is set on the objective record"
 
+# ── Reject command tests ─────────────────────────────────────────
+
+# Test: Happy path — reject sets status to idle
+OUT_RJ=$($ARIA create "Reject test objective" 2>&1)
+IDRJ=$(echo "$OUT_RJ" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+# Set it to needs-input so we can verify reject resets to idle
+sql "UPDATE objectives SET status='needs-input', updated_at=$(date +%s) WHERE id='$IDRJ';"
+$ARIA reject "$IDRJ" "not good enough, try again" > /dev/null 2>&1
+STATUS_RJ=$(sql "SELECT status FROM objectives WHERE id='$IDRJ';")
+assert_eq "$STATUS_RJ" "idle" "T58: Reject sets the objective's status to 'idle'"
+
+# Test: Reject inserts feedback message into child's inbox
+REJECT_MSG=$(sql "SELECT message FROM inbox WHERE objective_id='$IDRJ' AND message='not good enough, try again';")
+assert_eq "$REJECT_MSG" "not good enough, try again" "T59: Reject inserts feedback message into child's inbox"
+
+# Test: Reject on non-descendant fails with ancestry error
+OUT_RJ2=$($ARIA create "Reject scope test" 2>&1)
+IDRJ2=$(echo "$OUT_RJ2" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+ERR_RJ=$(ARIA_OBJECTIVE_ID="$IDRJ2" $ARIA reject "$IDRJ" "nope" 2>&1)
+EXIT_RJ=$?
+assert_contains "$ERR_RJ" "it is not your child or descendant" "T60: Reject on a non-descendant fails with ancestry error"
+assert_gt "$EXIT_RJ" "0" "T60b: Reject on non-descendant exits non-zero"
+
+# Test: Reject on resolved objective fails with terminal error
+OUT_RJ3=$($ARIA create "Reject terminal test" 2>&1)
+IDRJ3=$(echo "$OUT_RJ3" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+$ARIA succeed "$IDRJ3" "done" > /dev/null 2>&1
+ERR_RJ3=$($ARIA reject "$IDRJ3" "try again" 2>&1)
+EXIT_RJ3=$?
+assert_contains "$ERR_RJ3" "already resolved" "T61: Reject on a resolved objective fails with terminal error"
+assert_gt "$EXIT_RJ3" "0" "T61b: Reject on resolved objective exits non-zero"
+
+# Test: Reject clears waiting_on field
+OUT_RJ4=$($ARIA create "Reject waiting test" 2>&1)
+IDRJ4=$(echo "$OUT_RJ4" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+ARIA_OBJECTIVE_ID="$IDRJ4" $ARIA wait "waiting for something" > /dev/null 2>&1
+WAITING_BEFORE=$(sql "SELECT waiting_on FROM objectives WHERE id='$IDRJ4';")
+assert_eq "$WAITING_BEFORE" "waiting for something" "T62a: Waiting_on is set before reject"
+$ARIA reject "$IDRJ4" "stop waiting, do it differently" > /dev/null 2>&1
+WAITING_AFTER=$(sql "SELECT COALESCE(waiting_on, 'NULL') FROM objectives WHERE id='$IDRJ4';")
+assert_eq "$WAITING_AFTER" "NULL" "T62b: Reject clears the waiting_on field"
+
 # ── Wait scoping test ────────────────────────────────────────────
 
 # Test: Wait without ARIA_OBJECTIVE_ID fails with instructive error

@@ -101,6 +101,16 @@ export const commands: Record<string, CommandDef> = {
     scope: "none",
     description: "Notify Max directly with importance and urgency flags",
   },
+  reject: {
+    name: "reject",
+    syntax: 'aria reject <id> "feedback"',
+    args: [
+      { name: "id", required: true, type: "string", positional: true },
+      { name: "feedback", required: true, type: "string", positional: true },
+    ],
+    scope: "descendant",
+    description: "Reject a child/descendant objective with feedback — sets it back to idle for another attempt",
+  },
   find: {
     name: "find",
     syntax: 'aria find "query"',
@@ -218,6 +228,42 @@ export function validateFail(
   if (callerId && callerId !== 'max') {
     if (!isDescendantOf(db, targetId, callerId)) {
       return `Cannot fail objective ${targetId}: it is not your child or descendant. You can only fail objectives you created.`;
+    }
+  }
+
+  return null;
+}
+
+export function validateReject(
+  db: Database.Database,
+  targetId: string | undefined,
+  feedback: string | undefined,
+  callerId: string | undefined,
+): string | null {
+  if (!targetId) {
+    return `Usage: ${commands.reject.syntax}`;
+  }
+
+  if (!feedback || feedback.trim() === "") {
+    return 'aria reject requires feedback. Usage: aria reject <id> "what to improve". The feedback helps the child understand what to fix.';
+  }
+
+  const obj = getObjective(db, targetId);
+  if (!obj) {
+    return `Objective not found: ${targetId}`;
+  }
+
+  if (isTerminal(obj.status)) {
+    return `Cannot reject: objective is already ${obj.status}`;
+  }
+
+  if (callerId && callerId === targetId) {
+    return "Cannot reject yourself. Your parent decides your fate.";
+  }
+
+  if (callerId && callerId !== 'max') {
+    if (!isDescendantOf(db, targetId, callerId)) {
+      return `Cannot reject objective ${targetId}: it is not your child or descendant. You can only reject objectives you created.`;
     }
   }
 

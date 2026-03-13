@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 import { initDb } from '../db/schema.js';
-import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation } from '../db/queries.js';
+import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation } from '../db/queries.js';
 import { startEngine } from '../engine/loop.js';
 import { startServer } from '../server/index.js';
-import { validateCreate, validateSucceed, validateFail, validateWait, validateTell, validateNotify } from '../commands/registry.js';
+import { validateCreate, validateSucceed, validateFail, validateReject, validateWait, validateTell, validateNotify } from '../commands/registry.js';
 import type { Objective, InboxMessage } from '../db/queries.js';
 import { assembleContextV2 } from '../context/assembler-v2.js';
 import personaBrick from '../context/bricks/persona/index.js';
@@ -79,6 +79,7 @@ Commands:
   inbox <id>                                             Show conversation for objective
   succeed <id> "summary"                                 Resolve a child objective (summary required)
   fail <id> "reason"                                     Fail a child objective (reason required)
+  reject <id> "feedback"                                 Reject a child objective with feedback (retry)
   wait "reason"                                          Set current objective to waiting
   tell <id> "message"                                    Send message to any objective
   notify "message" --important/--not-important --urgent/--not-urgent  Notify Max directly
@@ -445,6 +446,44 @@ function cmdFail(rawArgs: string[]): void {
   db.close();
 }
 
+function cmdReject(rawArgs: string[]): void {
+  const targetId = rawArgs[0];
+  const feedback = rawArgs[1];
+  const callerId = process.env.ARIA_OBJECTIVE_ID;
+
+  const db = initDb();
+  const error = validateReject(db, targetId, feedback, callerId);
+  if (error) {
+    console.error(error);
+    db.close();
+    process.exit(1);
+  }
+
+  const obj = getObjective(db, targetId!)!;
+
+  updateStatus(db, targetId!, 'idle');
+  clearWaitingOn(db, targetId!);
+
+  insertMessage(db, {
+    objective_id: targetId!,
+    message: feedback!,
+    sender: callerId ?? 'max',
+    type: 'message',
+  });
+
+  if (isTTY) {
+    const shortId = targetId!.slice(0, 8);
+    console.log(`Rejected: ${color.yellow(shortId)} "${obj.objective}" — sent feedback`);
+  } else {
+    console.log(JSON.stringify({
+      id: targetId,
+      status: 'idle',
+    }, null, 2));
+  }
+
+  db.close();
+}
+
 function cmdWait(rawArgs: string[]): void {
   const { positional } = parseFlags(rawArgs);
   const reason = positional[0];
@@ -666,6 +705,10 @@ switch (command) {
 
   case 'fail':
     cmdFail(args);
+    break;
+
+  case 'reject':
+    cmdReject(args);
     break;
 
   case 'wait':

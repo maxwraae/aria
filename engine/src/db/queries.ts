@@ -162,6 +162,23 @@ export function setWaitingOn(db: Database.Database, id: string, reason: string):
   ).run(reason, id);
 }
 
+export function clearWaitingOn(db: Database.Database, id: string): void {
+  const ts = now();
+  stmt(
+    db,
+    "clearWaitingOn",
+    "UPDATE objectives SET waiting_on = NULL, updated_at = ? WHERE id = ?"
+  ).run(ts, id);
+
+  // Update FTS
+  stmt(
+    db,
+    "clearFtsWaitingOn",
+    `UPDATE objectives_fts SET waiting_on = NULL
+     WHERE rowid = (SELECT rowid FROM objectives WHERE id = ?)`
+  ).run(id);
+}
+
 export function updateObjective(db: Database.Database, id: string, fields: { objective?: string; description?: string }): void {
   const ts = now();
   if (fields.objective !== undefined) {
