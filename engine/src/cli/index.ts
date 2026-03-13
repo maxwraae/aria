@@ -8,6 +8,7 @@ import { validateCreate, validateSucceed, validateFail, validateReject, validate
 import type { Objective, InboxMessage } from '../db/queries.js';
 import { parseInterval } from './parse-interval.js';
 import { execFile } from 'child_process';
+import { remoteTree, remoteShow, remoteCreate, remoteSend, remoteInbox, remoteSucceed, remoteFail, remoteReject, remoteWait, remoteTell, remoteNotify, remoteFind } from './remote.js';
 import { assembleContext } from '../context/assembler.js';
 import { assembleContextV2 } from '../context/assembler-v2.js';
 import personaBrick from '../context/bricks/persona/index.js';
@@ -820,6 +821,45 @@ function cmdSchedules(rawArgs: string[]): void {
 
 const command = process.argv[2];
 const args = process.argv.slice(3);
+const coordinator = process.env.ARIA_COORDINATOR;
+
+// ── Remote mode (ARIA_COORDINATOR set) ───────────────────────────
+
+if (coordinator) {
+  const REMOTE_COMMANDS: Record<string, (coord: string, args: string[]) => Promise<void>> = {
+    tree:    (c) => remoteTree(c),
+    show:    (c, a) => remoteShow(c, a[0]),
+    create:  (c, a) => remoteCreate(c, a),
+    send:    (c, a) => remoteSend(c, a),
+    inbox:   (c, a) => remoteInbox(c, a),
+    succeed: (c, a) => remoteSucceed(c, a),
+    fail:    (c, a) => remoteFail(c, a),
+    reject:  (c, a) => remoteReject(c, a),
+    wait:    (c, a) => remoteWait(c, a),
+    tell:    (c, a) => remoteTell(c, a),
+    notify:  (c, a) => remoteNotify(c, a),
+    find:    (c, a) => remoteFind(c, a),
+  };
+
+  if (command === undefined || command === '--help' || command === '-h' || command === 'help') {
+    console.log(HELP);
+    console.log(`\n${isTTY ? '\x1b[33m' : ''}Remote mode: ${coordinator}${isTTY ? '\x1b[0m' : ''}`);
+  } else if (command in REMOTE_COMMANDS) {
+    REMOTE_COMMANDS[command](coordinator, args).catch((err: Error) => {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    });
+  } else if (command === 'engine' || command === 'context' || command === 'schedule' || command === 'schedules') {
+    console.error(`Command '${command}' is not available in remote mode.`);
+    process.exit(1);
+  } else {
+    console.error(`Unknown command: ${command}`);
+    console.log(HELP);
+    process.exit(1);
+  }
+} else {
+
+// ── Local mode (default) ─────────────────────────────────────────
 
 switch (command) {
   case undefined:
@@ -914,3 +954,5 @@ switch (command) {
     console.log(HELP);
     process.exit(1);
 }
+
+} // end local mode
