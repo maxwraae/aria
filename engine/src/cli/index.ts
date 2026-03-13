@@ -7,6 +7,7 @@ import { startServer } from '../server/index.js';
 import { validateCreate, validateSucceed, validateFail, validateReject, validateWait, validateTell, validateNotify } from '../commands/registry.js';
 import type { Objective, InboxMessage } from '../db/queries.js';
 import { parseInterval } from './parse-interval.js';
+import { execFile } from 'child_process';
 import { assembleContext } from '../context/assembler.js';
 import { assembleContextV2 } from '../context/assembler-v2.js';
 import personaBrick from '../context/bricks/persona/index.js';
@@ -595,6 +596,21 @@ function cmdNotify(rawArgs: string[]): void {
 
   if (!isTTY) {
     console.log(JSON.stringify({ message, important, urgent }, null, 2));
+  }
+
+  // Fire-and-forget macOS notification via terminal-notifier
+  const titleMarkers = [
+    urgent && important ? '[!!]' : '',
+    !urgent && important ? '[!]' : '',
+    urgent && !important ? '[!]' : '',
+  ].filter(Boolean).join('');
+  const notifTitle = titleMarkers ? `ARIA ${titleMarkers}` : 'ARIA';
+  const notifArgs = ['-title', notifTitle, '-message', message!, '-open', 'http://localhost:8080'];
+  try {
+    const child = execFile('terminal-notifier', notifArgs, () => {});
+    child.unref();
+  } catch {
+    // terminal-notifier not available — silently ignore
   }
 
   db.close();
