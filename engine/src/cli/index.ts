@@ -7,13 +7,17 @@ import { startServer } from '../server/index.js';
 import { validateCreate, validateSucceed, validateFail, validateReject, validateWait, validateTell, validateNotify } from '../commands/registry.js';
 import type { Objective, InboxMessage } from '../db/queries.js';
 import { parseInterval } from './parse-interval.js';
+import { assembleContext } from '../context/assembler.js';
 import { assembleContextV2 } from '../context/assembler-v2.js';
 import personaBrick from '../context/bricks/persona/index.js';
 import contractBrick from '../context/bricks/contract/index.js';
 import environmentBrick from '../context/bricks/environment/index.js';
 import similarBrick from '../context/bricks/similar/index.js';
+import treeBrick from '../context/bricks/tree/index.js';
+import conversationBrick from '../context/bricks/conversation/index.js';
 import { launchTUI } from '../context/tui/index.js';
 import { loadConfig } from '../context/config.js';
+import fs from 'fs';
 
 // ── Flag parsing ─────────────────────────────────────────────────
 
@@ -89,7 +93,7 @@ Commands:
   schedules [objective_id]                               List active schedules
   find "query"                                           Search objectives
   engine                                                 Start the engine
-  context --dump                                         Print assembled context
+  context [objective_id] [--dump|--tui]                   Print assembled context
 
 Options:
   --help                                                 Show this help message
@@ -634,8 +638,55 @@ function cmdFind(rawArgs: string[]): void {
 }
 
 function cmdContext(rawArgs: string[]): void {
-  const { flags } = parseFlags(rawArgs);
+  const { positional, flags } = parseFlags(rawArgs);
+  const objectiveId = positional[0] ?? null;
 
+  if (objectiveId) {
+    // Objective-specific context: use v1 assembler for full context
+    const db = initDb();
+    const obj = getObjective(db, objectiveId);
+    if (!obj) {
+      console.error(`Objective not found: ${objectiveId}`);
+      db.close();
+      process.exit(1);
+    }
+
+    const outPath = assembleContext(db, objectiveId);
+    const content = fs.readFileSync(outPath, 'utf-8');
+
+    if (flags['tui']) {
+      // For TUI mode with objective, use v2 assembler with all bricks
+      const config = loadConfig();
+      const bricks = [personaBrick, contractBrick, environmentBrick, treeBrick, conversationBrick, similarBrick];
+      const result = assembleContextV2(bricks, { db, objectiveId, config: config as unknown as Record<string, unknown> });
+
+      if (!isTTY) {
+        console.error('TUI requires a terminal. Use --dump for non-interactive output.');
+        db.close();
+        process.exit(1);
+      }
+
+      launchTUI(result, bricks, config);
+      db.close();
+      return;
+    }
+
+    // Default and --dump: print full assembled context
+    const budget = 80_000;
+    const tokens = Math.ceil(content.length / 4); // rough estimate
+    console.log(color.dim('─'.repeat(60)));
+    console.log(color.cyan(`Context Assembly for ${objectiveId.slice(0, 8)} "${obj.objective}"`));
+    console.log(color.dim('─'.repeat(60)));
+    console.log(`  ${'~tokens'.padEnd(14)} ${String(tokens).padStart(6)} tok  ${((tokens / budget) * 100).toFixed(1).padStart(5)}%  of ${budget.toLocaleString()} budget`);
+    console.log(color.dim('─'.repeat(60)));
+    console.log('');
+    console.log(content);
+
+    db.close();
+    return;
+  }
+
+  // No objective_id: static brick dump (existing behavior)
   const config = loadConfig();
   const bricks = [personaBrick, contractBrick, environmentBrick, similarBrick];
   const result = assembleContextV2(bricks, { config: config as unknown as Record<string, unknown> });
