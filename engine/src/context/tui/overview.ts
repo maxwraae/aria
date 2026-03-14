@@ -2,7 +2,7 @@
 // Pure rendering function — no side effects.
 
 import { tui } from './render.js';
-import type { AssemblyResult } from '../assembler-v2.js';
+import type { AssemblyResult } from '../assembler.js';
 import type { ContextConfig } from '../config.js';
 import { validateCaps } from '../config.js';
 import { MODEL_SPECS, BUDGETS } from '../models.js';

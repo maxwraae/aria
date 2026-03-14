@@ -8,22 +8,21 @@ import {
   getObjective,
   getChildren,
   getConversation,
-  getTreeUnified,
-  getObjectiveUnified,
-  getChildrenUnified,
-  getConversationUnified,
   insertMessage,
   createObjective,
   updateObjective,
   searchObjectives,
   matchObjectiveByText,
   updateStatus,
+  updateTurnSession,
   cascadeAbandon,
   setWaitingOn,
   clearWaitingOn,
   setResolutionSummary,
+  PROTECTED_IDS,
 } from '../db/queries.js';
 import { subscribe, unsubscribe, type StreamCallback } from '../engine/streams.js';
+import { getTTS } from './tts.js';
 
 // ── MIME types for static serving ─────────────────────────────────
 
@@ -90,7 +89,7 @@ export function startServer(
 
     // CORS headers for Tailscale access
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (method === 'OPTIONS') {
@@ -104,7 +103,7 @@ export function startServer(
 
       // GET /api/objectives - full tree
       if (method === 'GET' && pathname === '/api/objectives') {
-        const tree = getTreeUnified(db);
+        const tree = getTree(db);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(tree));
         return;
@@ -113,13 +112,13 @@ export function startServer(
       // GET /api/objectives/:id - single objective + children
       const showParams = matchRoute(pathname, '/api/objectives/:id');
       if (method === 'GET' && showParams && !pathname.includes('/conversation') && !pathname.includes('/message')) {
-        const obj = getObjectiveUnified(db, showParams.id);
+        const obj = getObjective(db, showParams.id);
         if (!obj) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Not found' }));
           return;
         }
-        const children = getChildrenUnified(db, showParams.id);
+        const children = getChildren(db, showParams.id);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ...obj, children }));
         return;
@@ -149,7 +148,7 @@ export function startServer(
       const convParams = matchRoute(pathname, '/api/objectives/:id/conversation');
       if (method === 'GET' && convParams) {
         const limit = parseInt(url.searchParams.get('limit') ?? '100', 10);
-        const messages = getConversationUnified(db, convParams.id).slice(0, limit);
+        const messages = getConversation(db, convParams.id).slice(0, limit);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(messages));
         return;
@@ -219,10 +218,10 @@ export function startServer(
         const matches = matchObjectiveByText(db, message);
 
         if (matches.length === 0) {
-          // No match — create new objective under root
+          // No match — create new objective under quick
           const newObj = createObjective(db, {
             objective: message,
-            parent: 'root',
+            parent: 'quick',
           });
           insertMessage(db, {
             objective_id: newObj.id,
@@ -284,6 +283,11 @@ export function startServer(
           res.end(JSON.stringify({ error: 'Not found' }));
           return;
         }
+        if (PROTECTED_IDS.has(succeedParams.id)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Cannot resolve protected objective' }));
+          return;
+        }
         const children = getChildren(db, succeedParams.id);
         const activeChildren = children.filter(c => ['idle', 'needs-input'].includes(c.status));
 
@@ -331,6 +335,11 @@ export function startServer(
         if (!obj) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Not found' }));
+          return;
+        }
+        if (PROTECTED_IDS.has(failParams.id)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Cannot fail protected objective' }));
           return;
         }
 
@@ -433,6 +442,90 @@ export function startServer(
         return;
       }
 
+      // GET /api/worker/objectives?machine=X
+      if (method === 'GET' && pathname === '/api/worker/objectives') {
+        const machine = url.searchParams.get('machine');
+        if (!machine) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'machine parameter required' }));
+          return;
+        }
+        // Get objectives with unprocessed messages assigned to this machine
+        const pending = db.prepare(`
+          SELECT DISTINCT o.* FROM objectives o
+          JOIN inbox i ON i.objective_id = o.id
+          WHERE i.turn_id IS NULL
+          AND o.status IN ('idle', 'needs-input')
+          AND o.machine = ?
+        `).all(machine);
+
+        // For each, include unprocessed messages
+        const result = (pending as Record<string, unknown>[]).map((obj) => ({
+          ...obj,
+          messages: db.prepare(
+            'SELECT * FROM inbox WHERE objective_id = ? AND turn_id IS NULL ORDER BY created_at'
+          ).all(obj.id),
+        }));
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+        return;
+      }
+
+      // POST /api/worker/turns/:turnId/complete
+      const workerCompleteParams = matchRoute(pathname, '/api/worker/turns/:turnId/complete');
+      if (method === 'POST' && workerCompleteParams) {
+        const body = await parseBody(req);
+        const { objectiveId, status, lastAssistantText, sessionId } = body;
+
+        if (!objectiveId || !lastAssistantText) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'objectiveId and lastAssistantText required' }));
+          return;
+        }
+
+        const turnId = workerCompleteParams.turnId;
+
+        // Update session ID on turn
+        if (sessionId) {
+          updateTurnSession(db, turnId, sessionId as string);
+        }
+
+        // Set status
+        const finalStatus = (status as string) || 'needs-input';
+        updateStatus(db, objectiveId as string, finalStatus);
+
+        // Store assistant response
+        const selfMsg = insertMessage(db, {
+          objective_id: objectiveId as string,
+          message: lastAssistantText as string,
+          sender: objectiveId as string,
+          type: 'reply',
+        });
+        db.prepare('UPDATE inbox SET turn_id = ? WHERE id = ?').run(turnId, selfMsg.id);
+
+        // Route to non-Max senders
+        const triggeredMessages = db.prepare(
+          "SELECT DISTINCT sender FROM inbox WHERE turn_id = ? AND sender != ? AND sender != ? AND sender != ?"
+        ).all(turnId, 'max', 'system', objectiveId) as { sender: string }[];
+
+        for (const { sender } of triggeredMessages) {
+          const senderObj = getObjective(db, sender);
+          if (senderObj) {
+            insertMessage(db, {
+              objective_id: sender,
+              message: lastAssistantText as string,
+              sender: objectiveId as string,
+              type: 'reply',
+            });
+          }
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
       // GET /api/search?q=
       if (method === 'GET' && pathname === '/api/search') {
         const q = url.searchParams.get('q') ?? '';
@@ -510,7 +603,7 @@ export function startServer(
     let lastTreeJSON = '';
 
     // Send initial tree snapshot
-    const tree = getTreeUnified(db);
+    const tree = getTree(db);
     const treeJSON = JSON.stringify(tree);
     lastTreeJSON = treeJSON;
     ws.send(JSON.stringify({ type: 'tree_snapshot', tree }));
@@ -519,7 +612,7 @@ export function startServer(
     const treeInterval = setInterval(() => {
       if (ws.readyState !== WebSocket.OPEN) return;
       try {
-        const currentTree = getTreeUnified(db);
+        const currentTree = getTree(db);
         const currentJSON = JSON.stringify(currentTree);
         if (currentJSON !== lastTreeJSON) {
           lastTreeJSON = currentJSON;
@@ -555,6 +648,28 @@ export function startServer(
           };
 
           subscribe(watchedObjectiveId, streamCallback);
+        }
+
+        // ── TTS ─────────────────────────────────────────────────
+        if (msg.type === 'tts_request') {
+          const text = msg.text as string;
+          const requestId = msg.requestId as string;
+          if (!text || !requestId) return;
+
+          const tts = getTTS();
+          if (!tts) {
+            ws.send(JSON.stringify({ type: 'tts_error', requestId, error: 'TTS not available' }));
+            return;
+          }
+
+          tts.synthesizeStreaming(text, (audio, sampleRate, isLastChunk) => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({ type: 'tts_audio', requestId, audio, sampleRate, isLastChunk }));
+          }).catch(err => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'tts_error', requestId, error: String(err) }));
+            }
+          });
         }
       } catch {
         // Invalid message, ignore

@@ -2,6 +2,9 @@ import Database from "better-sqlite3";
 import { generateId, now } from "./utils.js";
 import { withPeer } from './unified.js';
 
+// ── Protected objectives (cannot be abandoned, pruned, or resolved) ──
+export const PROTECTED_IDS = new Set(['root', 'quick']);
+
 // ── Types ──────────────────────────────────────────────────────────
 
 export interface Objective {
@@ -225,6 +228,7 @@ export function cascadeAbandon(db: Database.Database, parentId: string): void {
     ).all(parentId) as { id: string }[];
 
     for (const child of children) {
+      if (PROTECTED_IDS.has(child.id)) continue;
       stmt(
         db,
         "abandonObjective",
@@ -522,7 +526,7 @@ export function matchObjectiveByText(
      JOIN objectives_fts fts ON fts.rowid = o.rowid
      WHERE objectives_fts MATCH ?
        AND o.status NOT IN ('resolved', 'failed', 'abandoned')
-       AND o.id != 'root'
+       AND o.id NOT IN ('root', 'quick')
      ORDER BY fts.rank
      LIMIT 5`
   ).all(ftsQuery) as MatchedObjective[];
@@ -552,6 +556,7 @@ export function getStaleObjectives(
      WHERE o.status = 'idle'
        AND o.updated_at < ?
        AND o.parent IS NOT NULL
+       AND o.id NOT IN ('root', 'quick')
        AND NOT EXISTS (
          SELECT 1 FROM inbox i
          WHERE i.objective_id = o.id AND i.turn_id IS NULL

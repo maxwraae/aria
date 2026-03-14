@@ -121,6 +121,23 @@ export function initDb(): Database.Database {
     console.log("Seeded root objective");
   }
 
+  // Seed quick objective if it doesn't exist
+  const quick = db
+    .prepare("SELECT id FROM objectives WHERE id = 'quick'")
+    .get();
+  if (!quick) {
+    const ts = now();
+    db.prepare(
+      `INSERT INTO objectives (id, objective, description, parent, status, created_at, updated_at)
+       VALUES ('quick', 'Quick tasks', 'Catch-all for quick tasks from the search bar. This objective is permanent and protected.', 'root', 'idle', ?, ?)`
+    ).run(ts, ts);
+    db.prepare(
+      `INSERT INTO objectives_fts(rowid, objective, waiting_on, description, resolution_summary)
+       SELECT rowid, objective, waiting_on, description, resolution_summary FROM objectives WHERE id = 'quick'`
+    ).run();
+    console.log("Seeded quick objective");
+  }
+
   return db;
 }
 

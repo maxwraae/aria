@@ -3,8 +3,8 @@ import { enterAltScreen, exitAltScreen, clearScreen, hideCursor, showCursor } fr
 import { renderOverview } from './overview.js';
 import { renderBrickDetail } from './brick-detail.js';
 import { renderAssemblyView } from './assembly-view.js';
-import type { AssemblyResult } from '../assembler-v2.js';
-import { assembleContextV2 } from '../assembler-v2.js';
+import type { AssemblyResult } from '../assembler.js';
+import { assembleContext } from '../assembler.js';
 import type { Brick } from '../types.js';
 import type { ContextConfig } from '../config.js';
 import { saveConfig } from '../config.js';
@@ -100,7 +100,7 @@ export async function launchTUI(
   // Re-assemble after editor/config change
   function reassemble(): void {
     if (bricks) {
-      result = assembleContextV2(bricks, { config: config as unknown as Record<string, unknown> });
+      result = assembleContext(bricks, { config: config as unknown as Record<string, unknown> });
     }
   }
 

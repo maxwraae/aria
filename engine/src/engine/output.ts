@@ -8,6 +8,7 @@ import {
   insertMessage,
   updateStatus,
 } from "../db/queries.js";
+import { isWorker, getCoordinatorUrl } from "../db/node.js";
 
 /**
  * Process the NDJSON stream from `claude -p --output-format stream-json`.
@@ -178,7 +179,33 @@ export function processOutput(
     // Notify stream subscribers that this turn is complete
     emit(objectiveId, '', true);
 
-    // 5. Clean up context temp file
+    // 5. Push result to coordinator (worker mode only)
+    if (isWorker() && lastAssistantText) {
+      const coordUrl = getCoordinatorUrl();
+      if (coordUrl) {
+        const finalStatus = obj?.status === 'thinking' ? 'needs-input' : (obj?.status ?? 'needs-input');
+        fetch(`${coordUrl}/api/worker/turns/${turnId}/complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            objectiveId,
+            status: finalStatus,
+            lastAssistantText,
+            sessionId: null, // already set during stream
+          }),
+        }).then(res => {
+          if (res.ok) {
+            process.stderr.write(`[${tag}] Pushed result to coordinator\n`);
+          } else {
+            process.stderr.write(`[${tag}] Coordinator push failed: ${res.status}\n`);
+          }
+        }).catch(err => {
+          process.stderr.write(`[${tag}] Coordinator unreachable: ${err.message}\n`);
+        });
+      }
+    }
+
+    // 6. Clean up context temp file
     const contextPath = `/tmp/aria-context-${objectiveId}.md`;
     try {
       fs.unlinkSync(contextPath);

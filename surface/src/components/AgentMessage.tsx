@@ -4,8 +4,11 @@ import Markdown from "react-native-markdown-display";
 import { theme } from "../constants/theme";
 
 interface AgentMessageProps {
+  id?: string;
   text: string;
   whisper?: string;
+  onSpeak?: (text: string, messageId: string) => void;
+  isSpeaking?: boolean;
 }
 
 const markdownStyles = StyleSheet.create({
@@ -103,15 +106,32 @@ const markdownStyles = StyleSheet.create({
 
 const markdownRules = {};
 
-export function AgentMessage({ text, whisper }: AgentMessageProps) {
+export function AgentMessage({ id, text, whisper, onSpeak, isSpeaking }: AgentMessageProps) {
   return (
     <View style={styles.container}>
       <Markdown style={markdownStyles} rules={markdownRules}>
         {text}
       </Markdown>
-      {whisper ? (
-        <Whisper text={whisper} />
-      ) : null}
+      <View style={styles.footer}>
+        {whisper ? (
+          <Whisper text={whisper} />
+        ) : <View />}
+        {onSpeak ? (
+          <Pressable
+            onPress={() => onSpeak(text)}
+            hitSlop={8}
+            style={({ pressed }) => [
+              styles.speakButton,
+              pressed && { opacity: 0.6 },
+              isSpeaking && styles.speakButtonActive,
+            ]}
+          >
+            <Text style={[styles.speakIcon, isSpeaking && styles.speakIconActive]}>
+              {isSpeaking ? '◼' : '♪'}
+            </Text>
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -138,10 +158,32 @@ const styles = StyleSheet.create({
   container: {
     marginVertical: 4,
   },
+  footer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: -4,
+  },
   whisper: {
     ...theme.typography.whisper,
     fontFamily: Platform.OS === "web" ? theme.fonts.mono : "monospace",
     textAlign: "right",
     marginTop: -8,
+    flex: 1,
+  },
+  speakButton: {
+    padding: 4,
+    opacity: 0.25,
+  },
+  speakButtonActive: {
+    opacity: 1,
+  },
+  speakIcon: {
+    fontSize: 12,
+    color: "rgba(0,0,0,0.4)",
+    fontFamily: theme.fonts.sans,
+  },
+  speakIconActive: {
+    color: theme.colors.amber,
   },
 });

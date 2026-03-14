@@ -1,49 +1,37 @@
-import Database from "better-sqlite3";
-import fs from "fs";
-import { getContract } from "./layers/contract.js";
-import { getObjectiveContext } from "./layers/objective.js";
-import { getConversationContext } from "./layers/conversation.js";
-import { getSimilarResolvedContext } from "./layers/similar.js";
+import type { Brick, BrickContext, BrickResult } from "./types.js";
+import { BUDGETS } from "./models.js";
 
-function getPersona(): string {
-  return `# PERSONA
-
-You are an AI agent working for Max. You operate inside an objectives system.
-Your job is to make your objective true. You have full tool access: read files,
-edit code, run commands, search the web. You are direct, capable, and concise.
-You always know your objective before you do anything else.`;
+export interface AssemblyResult {
+  sections: BrickResult[];
+  totalTokens: number;
+  content: string;
 }
 
-function getEnvironment(): string {
-  const now = new Date();
-  const date = now.toISOString().split("T")[0];
-  const time = now.toTimeString().slice(0, 5);
-
-  return `# ENVIRONMENT
-
-Date: ${date}
-Time: ${time}
-Machine: MacBook Pro M4, ~/aria as working root
-Objective DB: ~/.aria/objectives.db`;
-}
+const DEFAULT_BUDGET = BUDGETS.sonnet;
 
 export function assembleContext(
-  db: Database.Database,
-  objectiveId: string
-): string {
-  const sections = [
-    getPersona(),
-    getContract(),
-    getEnvironment(),
-    getObjectiveContext(db, objectiveId),
-    getSimilarResolvedContext(db, objectiveId),
-    getConversationContext(db, objectiveId),
-  ];
+  bricks: Brick[],
+  ctx: Partial<BrickContext> = {}
+): AssemblyResult {
+  const fullCtx: BrickContext = {
+    db: ctx.db ?? null,
+    objectiveId: ctx.objectiveId ?? null,
+    budget: ctx.budget ?? DEFAULT_BUDGET,
+    config: ctx.config ?? {},
+  };
 
-  const content = sections.join("\n\n---\n\n");
+  const sections: BrickResult[] = [];
+  let totalTokens = 0;
 
-  const outPath = `/tmp/aria-context-${objectiveId}.md`;
-  fs.writeFileSync(outPath, content, "utf-8");
+  for (const brick of bricks) {
+    const result = brick.render(fullCtx);
+    if (result) {
+      sections.push({ ...result, type: brick.type });
+      totalTokens += result.tokens;
+    }
+  }
 
-  return outPath;
+  const content = sections.map(s => s.content).join("\n\n---\n\n");
+
+  return { sections, totalTokens, content };
 }

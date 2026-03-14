@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assembleContextV2 } from "./assembler-v2.js";
+import { assembleContext } from "./assembler.js";
 import type { Brick, BrickContext, BrickResult } from "./types.js";
 
 function fakeBrick(name: string, content: string): Brick {
@@ -27,13 +27,13 @@ function nullBrick(name: string): Brick {
   };
 }
 
-describe("assembleContextV2", () => {
+describe("assembleContext", () => {
   it("assembles multiple bricks in order", () => {
     const bricks = [
       fakeBrick("A", "Section A content"),
       fakeBrick("B", "Section B content"),
     ];
-    const result = assembleContextV2(bricks);
+    const result = assembleContext(bricks);
 
     expect(result.sections).toHaveLength(2);
     expect(result.sections[0].name).toBe("A");
@@ -49,7 +49,7 @@ describe("assembleContextV2", () => {
       nullBrick("SKIP"),
       fakeBrick("C", "Content C"),
     ];
-    const result = assembleContextV2(bricks);
+    const result = assembleContext(bricks);
 
     expect(result.sections).toHaveLength(2);
     expect(result.sections[0].name).toBe("A");
@@ -61,13 +61,13 @@ describe("assembleContextV2", () => {
       fakeBrick("A", "abcd"),     // 4 chars = 1 token
       fakeBrick("B", "abcdefgh"), // 8 chars = 2 tokens
     ];
-    const result = assembleContextV2(bricks);
+    const result = assembleContext(bricks);
 
     expect(result.totalTokens).toBe(3);
   });
 
   it("returns empty result for no bricks", () => {
-    const result = assembleContextV2([]);
+    const result = assembleContext([]);
 
     expect(result.sections).toHaveLength(0);
     expect(result.totalTokens).toBe(0);
@@ -84,7 +84,7 @@ describe("assembleContextV2", () => {
         return null;
       },
     };
-    assembleContextV2([spy]);
+    assembleContext([spy]);
     expect(capturedBudget).toBe(80_000);
   });
 
@@ -98,7 +98,7 @@ describe("assembleContextV2", () => {
         return null;
       },
     };
-    assembleContextV2([spy], { objectiveId: "test-123" });
+    assembleContext([spy], { objectiveId: "test-123" });
     expect(capturedId).toBe("test-123");
   });
 });

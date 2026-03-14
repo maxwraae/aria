@@ -64,9 +64,13 @@ interface ChatCardProps {
   machine?: string | null;
   /** Called when user toggles machine assignment */
   onSetMachine?: (machine: string | null) => void;
+  /** Called when user clicks speak on an agent message */
+  onSpeak?: (text: string) => void;
+  /** ID of the message currently being spoken */
+  speakingMessageId?: string | null;
 }
 
-export function ChatCard({ session, focused = false, style, onDescend, onResolve, onAddChild, onRename, childCount = 0, resolvedCount = 0, scrollEnabled = true, urgent, important, onSend, streamingText, machine, onSetMachine }: ChatCardProps) {
+export function ChatCard({ session, focused = false, style, onDescend, onResolve, onAddChild, onRename, childCount = 0, resolvedCount = 0, scrollEnabled = true, urgent, important, onSend, streamingText, machine, onSetMachine, onSpeak, speakingMessageId }: ChatCardProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(session.messages);
 
   // Sync messages when the parent refreshes session.messages (e.g. after API reply loads)
@@ -272,6 +276,8 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
             : messages
         }
         scrollEnabled={scrollEnabled}
+        onSpeak={onSpeak}
+        speakingMessageId={speakingMessageId}
       />
 
       {/* Card input bar */}

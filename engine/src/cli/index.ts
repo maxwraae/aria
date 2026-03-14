@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 
 import { initDb } from '../db/schema.js';
-import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation, createSchedule, listSchedules, getTreeUnified, getObjectiveUnified, getConversationUnified, getChildrenUnified } from '../db/queries.js';
+import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation, createSchedule, listSchedules, getTreeUnified, getObjectiveUnified, getConversationUnified, getChildrenUnified, PROTECTED_IDS } from '../db/queries.js';
 import { startEngine } from '../engine/loop.js';
 import { startServer } from '../server/index.js';
 import { isDeepWork } from '../engine/concurrency.js';
 import { validateCreate, validateSucceed, validateFail, validateReject, validateWait, validateTell, validateNotify } from '../commands/registry.js';
 import type { Objective, InboxMessage } from '../db/queries.js';
 import { parseInterval } from './parse-interval.js';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { assembleContext } from '../context/assembler.js';
-import { assembleContextV2 } from '../context/assembler-v2.js';
 import personaBrick from '../context/bricks/persona/index.js';
 import contractBrick from '../context/bricks/contract/index.js';
 import environmentBrick from '../context/bricks/environment/index.js';
@@ -95,6 +94,8 @@ Commands:
   schedules [objective_id]                               List active schedules
   find "query"                                           Search objectives
   engine                                                 Start the engine
+  dev                                                    Start engine + surface (development)
+  up                                                     Start engine with built surface (production)
   context [objective_id] [--dump|--tui]                   Print assembled context
 
 Options:
@@ -374,6 +375,12 @@ function cmdSucceed(rawArgs: string[]): void {
     process.exit(1);
   }
 
+  if (PROTECTED_IDS.has(targetId!)) {
+    console.error(`Cannot resolve protected objective: ${targetId}`);
+    db.close();
+    process.exit(1);
+  }
+
   const obj = getObjective(db, targetId!)!;
 
   // Count active children before cascade
@@ -426,6 +433,12 @@ function cmdFail(rawArgs: string[]): void {
   const error = validateFail(db, targetId, reason, callerId);
   if (error) {
     console.error(error);
+    db.close();
+    process.exit(1);
+  }
+
+  if (PROTECTED_IDS.has(targetId!)) {
+    console.error(`Cannot fail protected objective: ${targetId}`);
     db.close();
     process.exit(1);
   }
@@ -667,7 +680,7 @@ function cmdContext(rawArgs: string[]): void {
   const objectiveId = positional[0] ?? null;
 
   if (objectiveId) {
-    // Objective-specific context: use v1 assembler for full context
+    // Objective-specific context
     const db = initDb();
     const obj = getObjective(db, objectiveId);
     if (!obj) {
@@ -676,14 +689,12 @@ function cmdContext(rawArgs: string[]): void {
       process.exit(1);
     }
 
-    const outPath = assembleContext(db, objectiveId);
-    const content = fs.readFileSync(outPath, 'utf-8');
+    const config = loadConfig();
+    const bricks = [personaBrick, contractBrick, environmentBrick, treeBrick, conversationBrick, similarBrick];
+    const result = assembleContext(bricks, { db, objectiveId, config: config as unknown as Record<string, unknown> });
+    const content = result.content;
 
     if (flags['tui']) {
-      // For TUI mode with objective, use v2 assembler with all bricks
-      const config = loadConfig();
-      const bricks = [personaBrick, contractBrick, environmentBrick, treeBrick, conversationBrick, similarBrick];
-      const result = assembleContextV2(bricks, { db, objectiveId, config: config as unknown as Record<string, unknown> });
 
       if (!isTTY) {
         console.error('TUI requires a terminal. Use --dump for non-interactive output.');
@@ -714,7 +725,7 @@ function cmdContext(rawArgs: string[]): void {
   // No objective_id: static brick dump (existing behavior)
   const config = loadConfig();
   const bricks = [personaBrick, contractBrick, environmentBrick, similarBrick];
-  const result = assembleContextV2(bricks, { config: config as unknown as Record<string, unknown> });
+  const result = assembleContext(bricks, { config: config as unknown as Record<string, unknown> });
 
   if (flags['dump']) {
     // Non-interactive dump to stdout
@@ -900,10 +911,69 @@ switch (command) {
     cmdContext(args);
     break;
 
+  case 'dev': {
+    const selfScript = decodeURIComponent(new URL(import.meta.url).pathname);
+    const surfaceDir = decodeURIComponent(new URL('../../../surface', import.meta.url).pathname);
+
+    console.log(color.cyan('[dev]') + ' Starting engine + surface...');
+
+    const engineProc = spawn(process.execPath, [selfScript, 'engine'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+
+    const viteBin = decodeURIComponent(new URL('../../../surface/node_modules/.bin/vite', import.meta.url).pathname);
+    const surfaceProc = spawn(viteBin, ['--port', '5173'], {
+      cwd: surfaceDir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+
+    engineProc.stdout?.on('data', (data: Buffer) => {
+      process.stdout.write(data);
+    });
+    engineProc.stderr?.on('data', (data: Buffer) => {
+      process.stderr.write(data);
+    });
+
+    surfaceProc.stdout?.on('data', (data: Buffer) => {
+      const lines = data.toString().split('\n');
+      for (const line of lines) {
+        if (line.trim()) process.stdout.write(color.magenta('[surface] ') + line + '\n');
+      }
+    });
+    surfaceProc.stderr?.on('data', (data: Buffer) => {
+      const lines = data.toString().split('\n');
+      for (const line of lines) {
+        if (line.trim()) process.stderr.write(color.magenta('[surface] ') + line + '\n');
+      }
+    });
+
+    const cleanup = () => {
+      console.log('\n[dev] Shutting down...');
+      engineProc.kill('SIGINT');
+      surfaceProc.kill('SIGINT');
+      setTimeout(() => process.exit(0), 2000);
+    };
+
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+
+    engineProc.on('exit', (code) => {
+      console.log(`[dev] Engine exited (${code})`);
+    });
+    surfaceProc.on('exit', (code) => {
+      console.log(`[dev] Surface exited (${code})`);
+    });
+
+    break;
+  }
+
+  case 'up':
   case 'engine': {
     const engineDb = initDb();
     const { nudge } = startEngine(engineDb);
-    const surfaceDist = new URL('../../../surface/dist', import.meta.url).pathname;
+    const surfaceDist = decodeURIComponent(new URL('../../../surface/dist', import.meta.url).pathname);
     const server = startServer(engineDb, nudge, surfaceDist);
     process.on('SIGINT', () => {
       console.log('\n[engine] Shutting down...');

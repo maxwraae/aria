@@ -1,5 +1,5 @@
 import { tui } from './render.js';
-import type { AssemblyResult } from '../assembler-v2.js';
+import type { AssemblyResult } from '../assembler.js';
 
 /**
  * Renders the full assembled context with scroll support.

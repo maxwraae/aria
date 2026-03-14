@@ -12,7 +12,15 @@ import {
   InboxMessage,
 } from "../db/queries.js";
 import { assembleContext } from "../context/assembler.js";
+import personaBrick from "../context/bricks/persona/index.js";
+import contractBrick from "../context/bricks/contract/index.js";
+import environmentBrick from "../context/bricks/environment/index.js";
+import treeBrick from "../context/bricks/tree/index.js";
+import similarBrick from "../context/bricks/similar/index.js";
+import conversationBrick from "../context/bricks/conversation/index.js";
 import { processOutput } from "./output.js";
+
+const BRICKS = [personaBrick, contractBrick, environmentBrick, treeBrick, similarBrick, conversationBrick];
 
 function formatMessages(
   db: Database.Database,
@@ -44,7 +52,9 @@ export async function spawnTurn(
   const messages = getUnprocessedMessages(db, objectiveId);
 
   // 3. Assemble context → write to temp file
-  const contextPath = assembleContext(db, objectiveId);
+  const { content } = assembleContext(BRICKS, { db, objectiveId });
+  const contextPath = `/tmp/aria-context-${objectiveId}.md`;
+  fs.writeFileSync(contextPath, content, "utf-8");
 
   // 4. Build user message from bundled inbox messages
   const userMessage = formatMessages(db, messages, objectiveId);

@@ -7,6 +7,7 @@ import { RecentWorkStrip } from "./components/RecentWorkStrip";
 import { theme } from "./constants/theme";
 import { FocusProvider, useFocus } from "./context/FocusContext";
 import { useARIA } from "./hooks/useARIA";
+import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import type { ObjectiveNode } from "./hooks/adapters";
 
 // Time-of-day gradient: each period has a top and base color.
@@ -119,6 +120,32 @@ function useIsMobile() {
     return () => mq.removeEventListener("change", handler);
   }, []);
   return mobile;
+}
+
+const FAVICON_COLORS: Record<TodPeriod, string> = {
+  morning:   "hsl(25, 40%, 45%)",
+  midday:    "hsl(200, 25%, 40%)",
+  afternoon: "hsl(36, 45%, 42%)",
+  evening:   "hsl(20, 40%, 40%)",
+  night:     "hsl(220, 20%, 38%)",
+};
+
+const FAVICON_PATH = "M515.89 276.276C501.145 277.413 479.301 280.131 467.39 282.31C309.377 311.213 183.198 430.204 144.996 586.336C136.862 619.578 134.062 643.989 134.001 682.177C133.944 717.907 135.566 734.268 141.473 757.542C148.732 786.148 156.782 798.395 170.82 802.195C178.178 804.187 183.375 803.746 189.527 800.607C196.008 797.301 201.09 791.986 212.886 776.177C227.929 756.018 240.289 741.894 257.255 725.479C315.531 669.096 388.006 631.774 467.39 617.268C494.28 612.354 507.728 611.245 540.39 611.245C563.518 611.245 574.394 611.674 585.39 613.023C635.355 619.15 677.404 631.534 720.39 652.779C779.333 681.91 827.82 722.473 867.894 776.177C879.69 791.986 884.772 797.301 891.253 800.607C897.405 803.746 902.602 804.187 909.96 802.195C923.998 798.395 932.048 786.148 939.307 757.542C945.121 734.635 946.787 717.974 946.796 682.677C946.804 650.881 945.534 635.465 940.779 609.677C930.626 554.61 909.776 503.038 879.234 457.446C811.582 356.455 706.346 292.243 585.39 278.152C572.606 276.663 526.882 275.429 515.89 276.276Z";
+
+function useFavicon() {
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    function updateFavicon() {
+      const period = getTimePeriod(new Date().getHours());
+      const color = FAVICON_COLORS[period];
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1080"><path d="${FAVICON_PATH}" fill="${color}"/></svg>`;
+      const dataUrl = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+      document.querySelector('link[rel="icon"]')?.setAttribute("href", dataUrl);
+    }
+    updateFavicon();
+    const t = setInterval(updateFavicon, 60_000);
+    return () => clearInterval(t);
+  }, []);
 }
 
 function findById(node: ObjectiveNode | null, id: string): ObjectiveNode | null {
@@ -456,6 +483,7 @@ export default function App() {
   const isMobile = useIsMobile();
   const tod = useTimeOfDay();
   const clock = useClock();
+  useFavicon();
   // URL routing: read initial state from path
   const [view, setView] = useState<"home" | "work" | "needs-you">(() => {
     if (typeof window === 'undefined') return "home";
@@ -499,6 +527,26 @@ export default function App() {
   }, []);
 
   const aria = useARIA();
+  const audioPlayer = useAudioPlayer();
+
+  // Connect audio player to TTS WebSocket messages
+  useEffect(() => {
+    aria.onTTSMessage((msg) => {
+      if (msg.type === 'tts_audio') {
+        audioPlayer.onTTSChunk(msg);
+      }
+    });
+  }, [aria.onTTSMessage, audioPlayer.onTTSChunk]);
+
+  // Speak handler: if already speaking, stop. Otherwise, start TTS.
+  const handleSpeak = useCallback((text: string) => {
+    if (audioPlayer.speakingId) {
+      audioPlayer.stop();
+      return;
+    }
+    const requestId = aria.sendTTSRequest(text);
+    audioPlayer.startSpeaking(requestId);
+  }, [audioPlayer, aria]);
 
   const current = currentId ? findById(aria.tree, currentId) : aria.tree;
   const effectiveCurrent = current ?? aria.tree;
@@ -583,7 +631,7 @@ export default function App() {
       return;
     }
     const matches = aria.objectives
-      .filter(o => o.id !== 'root' && o.status !== 'resolved' && o.status !== 'abandoned')
+      .filter(o => o.id !== 'root' && o.id !== 'quick' && o.status !== 'resolved' && o.status !== 'abandoned')
       .filter(o =>
         o.objective.toLowerCase().includes(q) ||
         (o.description ?? '').toLowerCase().includes(q)
@@ -603,8 +651,8 @@ export default function App() {
     if (!trimmed) return;
     setHeroText("");
     setSearchResults([]);
-    aria.loadConversation('root');
-    aria.sendMessage('root', trimmed);
+    aria.loadConversation('quick');
+    aria.sendMessage('quick', trimmed);
     setHomeChat(true);
   }, [heroText, aria.loadConversation, aria.sendMessage]);
 
@@ -697,10 +745,10 @@ export default function App() {
                   <Text style={{ color: tod.textColor, fontSize: 14, fontFamily: theme.fonts.sans, fontWeight: "400" as const }}>{"\u2190"}</Text>
                 </Pressable>
                 <ChatCard
-                  session={aria.getSession('root')}
+                  session={aria.getSession('quick')}
                   scrollEnabled={true}
-                  onSend={(text) => aria.sendMessage('root', text)}
-                  streamingText={aria.streamingText.get('root')}
+                  onSend={(text) => aria.sendMessage('quick', text)}
+                  streamingText={aria.streamingText.get('quick')}
                   style={{ flex: 1, maxWidth: 640, width: "100%" } as any}
                 />
               </View>
