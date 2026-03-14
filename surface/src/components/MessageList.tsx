@@ -10,6 +10,8 @@ interface MessageListProps {
   messages: ChatMessage[];
   scrollEnabled?: boolean;
   bottomPad?: number;
+  onSpeak?: (text: string) => void;
+  speakingMessageId?: string | null;
 }
 
 function AnimatedMessageRow({ children, style }: { children: ReactNode; style?: any }) {
@@ -38,18 +40,25 @@ function AnimatedMessageRow({ children, style }: { children: ReactNode; style?: 
   );
 }
 
-function renderMessage(item: ChatMessage) {
-  switch (item.kind) {
-    case "user":
-      return <UserMessage message={item} />;
-    case "agent":
-      return <AgentMessage text={item.text} whisper={item.whisper} />;
-    case "tool_call":
-      return <Figure tool={item} />;
-  }
-}
+export function MessageList({ messages, scrollEnabled = true, bottomPad = 120, onSpeak, speakingMessageId }: MessageListProps) {
 
-export function MessageList({ messages, scrollEnabled = true, bottomPad = 120 }: MessageListProps) {
+  function renderMessage(item: ChatMessage) {
+    switch (item.kind) {
+      case "user":
+        return <UserMessage message={item} />;
+      case "agent":
+        return (
+          <AgentMessage
+            text={item.text}
+            whisper={item.whisper}
+            onSpeak={onSpeak}
+            isSpeaking={speakingMessageId === item.id}
+          />
+        );
+      case "tool_call":
+        return <Figure tool={item} />;
+    }
+  }
   const scrollRef = useRef<ScrollView>(null);
 
   // Scroll to bottom on mount (no animation)

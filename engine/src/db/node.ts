@@ -34,3 +34,12 @@ export function getPeerDbPath(): string {
   const peer = machineId === 'mini' ? 'macbook' : 'mini';
   return path.join(getDataDir(), `${peer}.db`);
 }
+
+export function isWorker(): boolean {
+  return getMachineId() !== 'mini';
+}
+
+export function getCoordinatorUrl(): string | null {
+  if (!isWorker()) return null;
+  return process.env.ARIA_COORDINATOR ?? 'http://mac-mini:8080';
+}

@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0",
+    "sherpa-onnx-darwin-arm64": "^1.12.29",
+    "sherpa-onnx-node": "^1.12.29",
     "ws": "^8.19.0"
   },
   "devDependencies": {

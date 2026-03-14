@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import { readFileSync, existsSync } from 'fs';
+import { homedir } from 'os';
 import {
   getPendingObjectives,
   getStuckObjectives,
@@ -10,7 +12,6 @@ import {
   getReadySchedules,
   deleteSchedule,
   bumpSchedule,
-  syncFromPeer,
 } from '../db/queries.js';
 import { getMachineId } from '../db/node.js';
 import { parseInterval } from '../cli/parse-interval.js';
@@ -22,8 +23,11 @@ const STUCK_THRESHOLD = 10 * 60; // 10 minutes
 const MAX_FAIL_COUNT = 3;
 const PRUNE_INTERVAL = 60 * 60; // 1 hour between prune sweeps
 const STALE_THRESHOLD_DAYS = 14;
+const BACKUP_CHECK_INTERVAL = 60 * 60; // 1 hour between backup health checks
+const BACKUP_MAX_AGE_HOURS = 25;
 
 let lastPruneTime = 0;
+let lastBackupCheckTime = 0;
 
 export function startEngine(db: Database.Database): { nudge: () => void } {
   const machineId = getMachineId();
@@ -83,16 +87,46 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
     }
   }
 
+  function checkBackupHealth() {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    if (nowSeconds - lastBackupCheckTime < BACKUP_CHECK_INTERVAL) return;
+    lastBackupCheckTime = nowSeconds;
+
+    const statusPath = `${homedir()}/.aria/backup-status.json`;
+    if (!existsSync(statusPath)) {
+      console.log('[engine] Backup status file not found — skipping health check');
+      return;
+    }
+
+    try {
+      const raw = readFileSync(statusPath, 'utf-8');
+      const status = JSON.parse(raw);
+
+      if (!status.success) {
+        console.warn('[engine] ⚠ Last backup failed:', status.error || 'unknown error');
+      }
+
+      const ageHours = (Date.now() - new Date(status.timestamp).getTime()) / (1000 * 60 * 60);
+      if (ageHours > BACKUP_MAX_AGE_HOURS) {
+        console.warn(`[engine] ⚠ Backup is ${Math.round(ageHours)}h old (threshold: ${BACKUP_MAX_AGE_HOURS}h)`);
+      }
+    } catch (err) {
+      console.warn('[engine] Failed to read backup status:', err);
+    }
+  }
+
   async function poll() {
     try {
-      // 0. Sync from peer database
-      syncFromPeer(db);
+      // Peer sync removed — data flows via HTTP push from workers
 
       // 1. Fire any ready schedules
       fireReadySchedules();
 
       // 1.5. Prune stale idle objectives (runs once per hour)
       pruneStale();
+
+      // 1.6. Check backup health (runs once per hour)
+      checkBackupHealth();
 
       // 2. Get objectives with unprocessed messages
       const pending = getPendingObjectives(db);

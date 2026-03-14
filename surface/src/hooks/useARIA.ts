@@ -13,6 +13,18 @@ function getWsUrl(): string {
   return 'ws://localhost:8080/ws';
 }
 
+export type TTSMessage = {
+  type: 'tts_audio';
+  requestId: string;
+  audio: string;
+  sampleRate: number;
+  isLastChunk: boolean;
+} | {
+  type: 'tts_error';
+  requestId: string;
+  error: string;
+};
+
 export interface UseARIAReturn {
   tree: ObjectiveNode | null;
   objectives: Objective[];
@@ -25,6 +37,9 @@ export interface UseARIAReturn {
   updateObjective: (id: string, fields: { objective?: string; description?: string }) => Promise<void>;
   setMachine: (id: string, machine: string | null) => Promise<void>;
   watchObjective: (objectiveId: string) => void;
+  sendTTSRequest: (text: string) => string;
+  cancelTTS: (requestId: string) => void;
+  onTTSMessage: (cb: (msg: TTSMessage) => void) => void;
   streamingText: Map<string, string>;
   connected: boolean;
 }
@@ -41,6 +56,7 @@ export function useARIA(): UseARIAReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const objectivesRef = useRef<Objective[]>([]);
+  const ttsCallbackRef = useRef<((msg: TTSMessage) => void) | null>(null);
 
   // Keep objectivesRef in sync
   useEffect(() => {
@@ -86,6 +102,8 @@ export function useARIA(): UseARIAReturn {
               }
               return next;
             });
+          } else if (msg.type === 'tts_audio' || msg.type === 'tts_error') {
+            ttsCallbackRef.current?.(msg);
           }
         } catch {
           // Invalid message, ignore
@@ -215,6 +233,26 @@ export function useARIA(): UseARIAReturn {
     }
   }, [refreshTree]);
 
+  const sendTTSRequest = useCallback((text: string): string => {
+    const requestId = crypto.randomUUID();
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'tts_request', requestId, text }));
+    }
+    return requestId;
+  }, []);
+
+  const cancelTTS = useCallback((requestId: string) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'tts_cancel', requestId }));
+    }
+  }, []);
+
+  const onTTSMessage = useCallback((cb: (msg: TTSMessage) => void) => {
+    ttsCallbackRef.current = cb;
+  }, []);
+
   const setMachine = useCallback(async (id: string, machine: string | null) => {
     try {
       await fetch(`/api/objectives/${id}`, {
@@ -240,6 +278,9 @@ export function useARIA(): UseARIAReturn {
     updateObjective: updateObj,
     setMachine,
     watchObjective,
+    sendTTSRequest,
+    cancelTTS,
+    onTTSMessage,
     streamingText,
     connected,
   };
