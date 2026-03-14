@@ -10,6 +10,7 @@ export interface Objective {
   urgent: number;
   model: string;
   cwd: string | null;
+  machine?: string | null;
   fail_count: number;
   created_at: number;
   updated_at: number;

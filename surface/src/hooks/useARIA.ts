@@ -23,6 +23,7 @@ export interface UseARIAReturn {
   sendMessage: (objectiveId: string, text: string) => Promise<void>;
   createObjective: (parent: string, objective: string, instructions?: string) => Promise<string | null>;
   updateObjective: (id: string, fields: { objective?: string; description?: string }) => Promise<void>;
+  setMachine: (id: string, machine: string | null) => Promise<void>;
   watchObjective: (objectiveId: string) => void;
   streamingText: Map<string, string>;
   connected: boolean;
@@ -214,6 +215,19 @@ export function useARIA(): UseARIAReturn {
     }
   }, [refreshTree]);
 
+  const setMachine = useCallback(async (id: string, machine: string | null) => {
+    try {
+      await fetch(`/api/objectives/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machine }),
+      });
+      await refreshTree();
+    } catch (err) {
+      console.error('[useARIA] setMachine error:', err);
+    }
+  }, [refreshTree]);
+
   return {
     tree,
     objectives,
@@ -224,6 +238,7 @@ export function useARIA(): UseARIAReturn {
     sendMessage,
     createObjective: createObj,
     updateObjective: updateObj,
+    setMachine,
     watchObjective,
     streamingText,
     connected,

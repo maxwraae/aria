@@ -5,6 +5,7 @@ import { tui } from './render.js';
 import type { AssemblyResult } from '../assembler-v2.js';
 import type { ContextConfig } from '../config.js';
 import { validateCaps } from '../config.js';
+import { MODEL_SPECS, BUDGETS } from '../models.js';
 
 // Strip ANSI escape codes to measure the visible length of a string.
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -18,19 +19,6 @@ function padVisible(s: string, width: number, char = ' '): string {
   const pad = Math.max(0, width - len);
   return s + char.repeat(pad);
 }
-
-// Model definitions with context window sizes and per-model fill targets.
-interface ModelSpec {
-  name: string;
-  contextWindow: number; // total tokens
-  fillTarget: number;    // fraction of contextWindow
-}
-
-const MODELS: ModelSpec[] = [
-  { name: 'Opus',   contextWindow: 200_000, fillTarget: 0.50 },  // 100K budget
-  { name: 'Sonnet', contextWindow: 200_000, fillTarget: 0.40 },  //  80K budget
-  { name: 'Haiku',  contextWindow: 200_000, fillTarget: 0.30 },  //  60K budget
-];
 
 export function renderOverview(
   result: AssemblyResult,
@@ -51,13 +39,12 @@ export function renderOverview(
   const COL_BAR = 22; // 20 chars of bar + 2-space gap
   const COL_MODEL = 14; // per model, right-aligned
 
-  // Max bar scale is Opus budget: 200K * 0.50 = 100K tokens
-  const OPUS_BUDGET = 200_000 * 0.50; // 100_000
+  // Max bar scale is Opus budget: 500K tokens
   const BAR_WIDTH = 20;
 
   function budgetBar(tokens: number): string {
     if (tokens === 0) return ' '.repeat(COL_BAR);
-    const pct = tokens / OPUS_BUDGET;
+    const pct = tokens / BUDGETS.opus;
     const filled = Math.max(1, Math.round(pct * BAR_WIDTH));
     const bar = '█'.repeat(filled);
     const coloredBar = pct < 0.25
@@ -70,9 +57,8 @@ export function renderOverview(
   }
 
   // Each model's budget = contextWindow * fillTarget
-  function fmtPct(tokens: number, m: ModelSpec): string {
-    const budget = m.contextWindow * m.fillTarget;
-    return `${((tokens / budget) * 100).toFixed(1)}%`;
+  function fmtPct(tokens: number, m: typeof MODEL_SPECS[number]): string {
+    return `${((tokens / m.budget) * 100).toFixed(1)}%`;
   }
 
   function formatRow(
@@ -90,7 +76,7 @@ export function renderOverview(
 
     const tokStr = `${tokens.toLocaleString('en-US')} tok`;
 
-    const modelPcts = MODELS.map(m =>
+    const modelPcts = MODEL_SPECS.map(m =>
       fmtPct(tokens, m).padStart(COL_MODEL),
     ).join('');
 
@@ -107,7 +93,7 @@ export function renderOverview(
   // Data rows: MARGIN + marker(1) + space(1) + num + name + type + tokens + bar = left portion
   const leftCols = 2 + COL_NUM + COL_NAME + COL_TYPE + COL_TOKENS + COL_BAR; // marker+space + fields
   const title = 'Context Assembly';
-  const modelHeaders = MODELS.map(m => {
+  const modelHeaders = MODEL_SPECS.map(m => {
     const windowK = (m.contextWindow / 1000).toFixed(0);
     const label = `${m.name} ${windowK}K`;
     return label.padStart(COL_MODEL);
@@ -126,7 +112,7 @@ export function renderOverview(
   const totalNum = padVisible('', COL_NUM);
   const totalName = padVisible(tui.dim('TOTAL'), COL_NAME + COL_TYPE);
   const totalTok = tui.dim(`${result.totalTokens.toLocaleString('en-US')} tok`.padStart(COL_TOKENS));
-  const totalModelPcts = MODELS.map(m =>
+  const totalModelPcts = MODEL_SPECS.map(m =>
     tui.dim(fmtPct(result.totalTokens, m).padStart(COL_MODEL)),
   ).join('');
   const totalBar = budgetBar(result.totalTokens);

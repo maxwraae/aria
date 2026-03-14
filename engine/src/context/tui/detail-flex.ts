@@ -1,7 +1,6 @@
 import { tui, wrapLines, scrollSlice, scrollIndicator } from './render.js';
 import type { BrickResult } from '../types.js';
-
-const BUDGETS = { opus: 100_000, sonnet: 80_000, haiku: 60_000 };
+import { BUDGETS } from '../models.js';
 
 /**
  * Renders a full-screen detail view for a flex/conversation brick.

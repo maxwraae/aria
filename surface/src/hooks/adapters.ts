@@ -11,6 +11,7 @@ export interface ObjectiveNode {
   urgent?: boolean;
   important?: boolean;
   model?: string;
+  machine?: string | null;
   children?: ObjectiveNode[];
 }
 
@@ -63,6 +64,7 @@ export function buildTree(objectives: Objective[]): ObjectiveNode | null {
       urgent: obj.urgent === 1 ? true : undefined,
       important: obj.important === 1 ? true : undefined,
       model: obj.model,
+      machine: obj.machine ?? null,
       children: build(obj.id),
     }));
   }

@@ -1,17 +1,16 @@
 import Database from "better-sqlite3";
-import path from "path";
-import os from "os";
 import fs from "fs";
 import { now } from "./utils.js";
+import { getLocalDbPath, getDataDir } from "./node.js";
 
-const DB_DIR = path.join(os.homedir(), ".aria");
-const DB_PATH = path.join(DB_DIR, "objectives.db");
+export const DB_DIR = getDataDir();
+export const DB_PATH = getLocalDbPath();
 
 export function initDb(): Database.Database {
   fs.mkdirSync(DB_DIR, { recursive: true });
 
   const db = new Database(DB_PATH);
-  db.pragma("journal_mode = WAL");
+  db.pragma("journal_mode = DELETE");
   db.pragma("foreign_keys = ON");
 
   db.exec(`
@@ -98,6 +97,12 @@ export function initDb(): Database.Database {
       FOREIGN KEY (objective_id) REFERENCES objectives(id)
     );
   `);
+
+  // Migration: add processed_by column to inbox if missing
+  const inboxCols = db.prepare(`PRAGMA table_info(inbox)`).all() as Array<{name: string}>;
+  if (!inboxCols.some(c => c.name === 'processed_by')) {
+    db.exec(`ALTER TABLE inbox ADD COLUMN processed_by TEXT`);
+  }
 
   // Seed root objective if it doesn't exist
   const root = db

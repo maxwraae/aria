@@ -10,7 +10,9 @@ import {
   getReadySchedules,
   deleteSchedule,
   bumpSchedule,
+  syncFromPeer,
 } from '../db/queries.js';
+import { getMachineId } from '../db/node.js';
 import { parseInterval } from '../cli/parse-interval.js';
 import { isMaxActive, atConcurrencyLimit } from './concurrency.js';
 import { spawnTurn } from './spawn.js';
@@ -24,6 +26,9 @@ const STALE_THRESHOLD_DAYS = 14;
 let lastPruneTime = 0;
 
 export function startEngine(db: Database.Database): { nudge: () => void } {
+  const machineId = getMachineId();
+  console.log(`[engine] Machine: ${machineId}`);
+
   // Recover objectives left in 'thinking' from a previous engine crash
   const staleThinking = db.prepare(
     "SELECT id FROM objectives WHERE status = 'thinking'"
@@ -80,17 +85,26 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
 
   async function poll() {
     try {
-      // 0. Fire any ready schedules
+      // 0. Sync from peer database
+      syncFromPeer(db);
+
+      // 1. Fire any ready schedules
       fireReadySchedules();
 
-      // 0.5. Prune stale idle objectives (runs once per hour)
+      // 1.5. Prune stale idle objectives (runs once per hour)
       pruneStale();
 
-      // 1. Get objectives with unprocessed messages
+      // 2. Get objectives with unprocessed messages
       const pending = getPendingObjectives(db);
       const maxActive = isMaxActive(db);
 
-      for (const obj of pending) {
+      // Filter by machine assignment
+      const myPending = pending.filter(obj => {
+        if (!obj.machine) return machineId === 'mini'; // unassigned defaults to mini
+        return obj.machine === machineId;
+      });
+
+      for (const obj of myPending) {
         if (atConcurrencyLimit(db)) break;
 
         // When Max is active, only run Max's messages and urgent items
@@ -106,7 +120,7 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
         spawnTurn(db, obj.id);
       }
 
-      // 2. Recover stuck objectives (thinking > 10 min)
+      // 3. Recover stuck objectives (thinking > 10 min)
       const stuck = getStuckObjectives(db, STUCK_THRESHOLD);
       for (const obj of stuck) {
         const failCount = incrementFailCount(db, obj.id);
