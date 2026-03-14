@@ -103,6 +103,7 @@ export function useARIA(): UseARIAReturn {
               return next;
             });
           } else if (msg.type === 'tts_audio' || msg.type === 'tts_error') {
+            console.log('[TTS] ws received:', msg.type, 'callback:', !!ttsCallbackRef.current);
             ttsCallbackRef.current?.(msg);
           }
         } catch {
@@ -236,8 +237,10 @@ export function useARIA(): UseARIAReturn {
   const sendTTSRequest = useCallback((text: string): string => {
     const requestId = crypto.randomUUID();
     const ws = wsRef.current;
+    console.log('[TTS] sendTTSRequest, ws:', !!ws, 'readyState:', ws?.readyState);
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'tts_request', requestId, text }));
+      console.log('[TTS] sent tts_request:', requestId);
     }
     return requestId;
   }, []);

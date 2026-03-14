@@ -7,7 +7,7 @@ interface AgentMessageProps {
   id?: string;
   text: string;
   whisper?: string;
-  onSpeak?: (text: string, messageId: string) => void;
+  onSpeak?: (text: string) => void;
   isSpeaking?: boolean;
 }
 
