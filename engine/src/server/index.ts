@@ -8,19 +8,21 @@ import {
   getObjective,
   getChildren,
   getConversation,
+  getTreeUnified,
+  getObjectiveUnified,
+  getChildrenUnified,
+  getConversationUnified,
   insertMessage,
   createObjective,
   updateObjective,
   searchObjectives,
   matchObjectiveByText,
-  getPendingForMachine,
   updateStatus,
   cascadeAbandon,
   setWaitingOn,
   clearWaitingOn,
   setResolutionSummary,
 } from '../db/queries.js';
-import { assembleContext } from '../context/assembler.js';
 import { subscribe, unsubscribe, type StreamCallback } from '../engine/streams.js';
 
 // ── MIME types for static serving ─────────────────────────────────
@@ -102,7 +104,7 @@ export function startServer(
 
       // GET /api/objectives - full tree
       if (method === 'GET' && pathname === '/api/objectives') {
-        const tree = getTree(db);
+        const tree = getTreeUnified(db);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(tree));
         return;
@@ -111,13 +113,13 @@ export function startServer(
       // GET /api/objectives/:id - single objective + children
       const showParams = matchRoute(pathname, '/api/objectives/:id');
       if (method === 'GET' && showParams && !pathname.includes('/conversation') && !pathname.includes('/message')) {
-        const obj = getObjective(db, showParams.id);
+        const obj = getObjectiveUnified(db, showParams.id);
         if (!obj) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Not found' }));
           return;
         }
-        const children = getChildren(db, showParams.id);
+        const children = getChildrenUnified(db, showParams.id);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ...obj, children }));
         return;
@@ -130,8 +132,8 @@ export function startServer(
         req.on('data', (chunk: Buffer) => { body += chunk; });
         req.on('end', () => {
           try {
-            const { objective, description } = JSON.parse(body);
-            updateObjective(db, patchParams.id, { objective, description });
+            const { objective, description, machine } = JSON.parse(body);
+            updateObjective(db, patchParams.id, { objective, description, machine });
             const updated = getObjective(db, patchParams.id);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(updated));
@@ -147,7 +149,7 @@ export function startServer(
       const convParams = matchRoute(pathname, '/api/objectives/:id/conversation');
       if (method === 'GET' && convParams) {
         const limit = parseInt(url.searchParams.get('limit') ?? '100', 10);
-        const messages = getConversation(db, convParams.id, limit);
+        const messages = getConversationUnified(db, convParams.id).slice(0, limit);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(messages));
         return;
@@ -263,63 +265,6 @@ export function startServer(
         }));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ routed: false, candidates }));
-        return;
-      }
-
-      // GET /api/worker/objectives?machine=<name>
-      if (method === 'GET' && pathname === '/api/worker/objectives') {
-        const machine = url.searchParams.get('machine') ?? '';
-        if (!machine) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'machine parameter required' }));
-          return;
-        }
-        const pending = getPendingForMachine(db, machine);
-        const results = pending.map(({ objective: obj, messages }) => {
-          const contextPath = assembleContext(db, obj.id);
-          const context = fs.readFileSync(contextPath, 'utf-8');
-          // Clean up temp file
-          try { fs.unlinkSync(contextPath); } catch { /* ignore */ }
-          return {
-            objectiveId: obj.id,
-            objective: obj.objective,
-            context,
-            messages,
-          };
-        });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(results));
-        return;
-      }
-
-      // POST /api/worker/turns/:id/complete
-      const workerCompleteParams = matchRoute(pathname, '/api/worker/turns/:id/complete');
-      if (method === 'POST' && workerCompleteParams) {
-        const body = await parseBody(req);
-        const result = body.result as string;
-        if (!result) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'result required' }));
-          return;
-        }
-        const objectiveId = workerCompleteParams.id;
-        const obj = getObjective(db, objectiveId);
-        if (!obj) {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Objective not found' }));
-          return;
-        }
-        // Insert result as a reply message
-        insertMessage(db, {
-          objective_id: objectiveId,
-          message: result,
-          sender: objectiveId,
-          type: 'reply',
-        });
-        // Set status to needs-input (same as output processor does after turn)
-        updateStatus(db, objectiveId, 'needs-input');
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
         return;
       }
 
@@ -565,7 +510,7 @@ export function startServer(
     let lastTreeJSON = '';
 
     // Send initial tree snapshot
-    const tree = getTree(db);
+    const tree = getTreeUnified(db);
     const treeJSON = JSON.stringify(tree);
     lastTreeJSON = treeJSON;
     ws.send(JSON.stringify({ type: 'tree_snapshot', tree }));
@@ -574,7 +519,7 @@ export function startServer(
     const treeInterval = setInterval(() => {
       if (ws.readyState !== WebSocket.OPEN) return;
       try {
-        const currentTree = getTree(db);
+        const currentTree = getTreeUnified(db);
         const currentJSON = JSON.stringify(currentTree);
         if (currentJSON !== lastTreeJSON) {
           lastTreeJSON = currentJSON;

@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { generateId, now } from "./utils.js";
+import { withPeer } from './unified.js';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -182,7 +183,7 @@ export function clearWaitingOn(db: Database.Database, id: string): void {
   ).run(id);
 }
 
-export function updateObjective(db: Database.Database, id: string, fields: { objective?: string; description?: string }): void {
+export function updateObjective(db: Database.Database, id: string, fields: { objective?: string; description?: string; machine?: string | null }): void {
   const ts = now();
   if (fields.objective !== undefined) {
     stmt(db, "updateObjectiveName", "UPDATE objectives SET objective = ?, updated_at = ? WHERE id = ?").run(fields.objective, ts, id);
@@ -191,6 +192,9 @@ export function updateObjective(db: Database.Database, id: string, fields: { obj
   if (fields.description !== undefined) {
     stmt(db, "updateObjectiveDesc", "UPDATE objectives SET description = ?, updated_at = ? WHERE id = ?").run(fields.description, ts, id);
     stmt(db, "updateFtsDescription", `UPDATE objectives_fts SET description = ? WHERE rowid = (SELECT rowid FROM objectives WHERE id = ?)`).run(fields.description, id);
+  }
+  if (fields.machine !== undefined) {
+    stmt(db, "updateObjectiveMachine", "UPDATE objectives SET machine = ?, updated_at = ? WHERE id = ?").run(fields.machine, ts, id);
   }
 }
 
@@ -343,29 +347,6 @@ export function getPendingObjectives(db: Database.Database): Objective[] {
        AND o.status IN ('idle', 'needs-input')
      ORDER BY o.urgent DESC, o.important DESC, o.created_at ASC`
   ).all() as Objective[];
-}
-
-// ── Worker queries ────────────────────────────────────────────────
-
-export function getPendingForMachine(
-  db: Database.Database,
-  machine: string
-): { objective: Objective; messages: InboxMessage[] }[] {
-  const objectives = stmt(
-    db,
-    "getPendingForMachine",
-    `SELECT DISTINCT o.* FROM objectives o
-     JOIN inbox i ON i.objective_id = o.id
-     WHERE i.turn_id IS NULL
-       AND o.machine = ?
-       AND o.status IN ('idle', 'needs-input')
-     ORDER BY o.urgent DESC, o.important DESC, o.created_at ASC`
-  ).all(machine) as Objective[];
-
-  return objectives.map((obj) => ({
-    objective: obj,
-    messages: getUnprocessedMessages(db, obj.id),
-  }));
 }
 
 // ── Turns ──────────────────────────────────────────────────────────
@@ -646,4 +627,114 @@ export function listSchedules(db: Database.Database, objectiveId?: string): Sche
     "listAllSchedules",
     "SELECT * FROM schedules ORDER BY next_at ASC"
   ).all() as Schedule[];
+}
+
+// ── Sync functions ─────────────────────────────────────────────────
+
+export function syncFromPeer(db: Database.Database): void {
+  withPeer(db, (hasPeer) => {
+    if (!hasPeer) return;
+
+    // Copy new objectives from peer that we don't have locally
+    db.exec(`
+      INSERT OR IGNORE INTO objectives (id, objective, description, parent, status, waiting_on, resolution_summary, important, urgent, model, cwd, machine, fail_count, created_at, updated_at)
+      SELECT id, objective, description, parent, status, waiting_on, resolution_summary, important, urgent, model, cwd, machine, fail_count, created_at, updated_at
+      FROM peer.objectives
+    `);
+
+    // Update local objectives with newer peer data (by updated_at)
+    db.exec(`
+      UPDATE objectives SET
+        status = peer.status,
+        waiting_on = peer.waiting_on,
+        resolution_summary = peer.resolution_summary,
+        important = peer.important,
+        urgent = peer.urgent,
+        fail_count = peer.fail_count,
+        updated_at = peer.updated_at
+      FROM peer.objectives AS peer
+      WHERE objectives.id = peer.id
+        AND peer.updated_at > objectives.updated_at
+    `);
+
+    // Copy new inbox messages from peer that we don't have locally
+    db.exec(`
+      INSERT OR IGNORE INTO inbox (id, objective_id, sender, type, message, turn_id, processed_by, created_at)
+      SELECT id, objective_id, sender, type, message, turn_id, processed_by, created_at
+      FROM peer.inbox
+    `);
+
+    // Copy new turns from peer
+    db.exec(`
+      INSERT OR IGNORE INTO turns (id, objective_id, turn_number, user_message, session_id, created_at)
+      SELECT id, objective_id, turn_number, user_message, session_id, created_at
+      FROM peer.turns
+    `);
+
+    // Copy new schedules from peer
+    db.exec(`
+      INSERT OR IGNORE INTO schedules (id, objective_id, message, interval, next_at, created_at)
+      SELECT id, objective_id, message, interval, next_at, created_at
+      FROM peer.schedules
+    `);
+  });
+}
+
+// ── Unified read functions ─────────────────────────────────────────
+
+export function getTreeUnified(db: Database.Database): Objective[] {
+  return withPeer(db, (hasPeer) => {
+    if (!hasPeer) return getTree(db);
+
+    const query = `
+      SELECT * FROM (
+        SELECT * FROM objectives WHERE status NOT IN ('resolved', 'abandoned')
+        UNION ALL
+        SELECT * FROM peer.objectives WHERE status NOT IN ('resolved', 'abandoned')
+          AND id NOT IN (SELECT id FROM objectives)
+      ) ORDER BY parent IS NOT NULL, created_at
+    `;
+    return db.prepare(query).all() as Objective[];
+  });
+}
+
+export function getObjectiveUnified(db: Database.Database, id: string): Objective | undefined {
+  return withPeer(db, (hasPeer) => {
+    const local = getObjective(db, id);
+    if (local || !hasPeer) return local;
+
+    return db.prepare('SELECT * FROM peer.objectives WHERE id = ?').get(id) as Objective | undefined;
+  });
+}
+
+export function getConversationUnified(db: Database.Database, objectiveId: string): InboxMessage[] {
+  return withPeer(db, (hasPeer) => {
+    if (!hasPeer) return getConversation(db, objectiveId);
+
+    const query = `
+      SELECT * FROM (
+        SELECT * FROM inbox WHERE objective_id = ?
+        UNION ALL
+        SELECT * FROM peer.inbox WHERE objective_id = ?
+          AND id NOT IN (SELECT id FROM inbox WHERE objective_id = ?)
+      ) ORDER BY created_at
+    `;
+    return db.prepare(query).all(objectiveId, objectiveId, objectiveId) as InboxMessage[];
+  });
+}
+
+export function getChildrenUnified(db: Database.Database, parentId: string): Objective[] {
+  return withPeer(db, (hasPeer) => {
+    if (!hasPeer) return getChildren(db, parentId);
+
+    const query = `
+      SELECT * FROM (
+        SELECT * FROM objectives WHERE parent = ?
+        UNION ALL
+        SELECT * FROM peer.objectives WHERE parent = ?
+          AND id NOT IN (SELECT id FROM objectives WHERE parent = ?)
+      ) ORDER BY created_at
+    `;
+    return db.prepare(query).all(parentId, parentId, parentId) as Objective[];
+  });
 }

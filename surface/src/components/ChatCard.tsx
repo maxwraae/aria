@@ -60,9 +60,13 @@ interface ChatCardProps {
   onSend?: (text: string) => Promise<void> | void;
   /** Streaming text currently being generated for this session's objective */
   streamingText?: string;
+  /** Current machine assignment for this objective */
+  machine?: string | null;
+  /** Called when user toggles machine assignment */
+  onSetMachine?: (machine: string | null) => void;
 }
 
-export function ChatCard({ session, focused = false, style, onDescend, onResolve, onAddChild, onRename, childCount = 0, resolvedCount = 0, scrollEnabled = true, urgent, important, onSend, streamingText }: ChatCardProps) {
+export function ChatCard({ session, focused = false, style, onDescend, onResolve, onAddChild, onRename, childCount = 0, resolvedCount = 0, scrollEnabled = true, urgent, important, onSend, streamingText, machine, onSetMachine }: ChatCardProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(session.messages);
 
   // Sync messages when the parent refreshes session.messages (e.g. after API reply loads)
@@ -235,6 +239,16 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
             {session.model === 'opus' ? 'O' : session.model === 'haiku' ? 'H' : 'S'}
           </Text>
         )}
+        {onSetMachine && (
+          <Pressable
+            onPress={() => onSetMachine(machine === 'macbook' ? null : 'macbook')}
+            style={[styles.machineToggle, Platform.OS === 'web' ? { cursor: 'pointer' } as any : undefined]}
+          >
+            <Text style={[styles.machineBadge, machine === 'macbook' && styles.machineBadgeActive]}>
+              {machine === 'macbook' ? 'MB' : 'Auto'}
+            </Text>
+          </Pressable>
+        )}
         <GlassButton
           size={32}
           onPress={isFocused ? dismissFocus : () => focusCard(session.id, session)}
@@ -346,6 +360,20 @@ const styles = StyleSheet.create({
     color: "rgba(0,0,0,0.25)",
     fontFamily: theme.fonts.sans,
     marginRight: 4,
+  },
+  machineToggle: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  machineBadge: {
+    fontSize: 10,
+    fontWeight: "600" as const,
+    color: "rgba(0,0,0,0.25)",
+    fontFamily: theme.fonts.sans,
+  },
+  machineBadgeActive: {
+    color: "rgba(0,0,0,0.55)",
   },
   focusIcon: {
     fontSize: 14,

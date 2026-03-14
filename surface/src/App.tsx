@@ -813,7 +813,9 @@ export default function App() {
                 contentContainerStyle={styles.scrollContent}
               >
                 <View style={styles.gridContent}>
-                  {aria.needsYou.map((item, i) => (
+                  {aria.needsYou.map((item, i) => {
+                    const obj = aria.objectives.find(o => o.id === item.session.id);
+                    return (
                     <ChatCard
                       key={item.session.id}
                       session={item.session}
@@ -823,8 +825,11 @@ export default function App() {
                       important={item.important}
                       onSend={(text) => aria.sendMessage(item.session.id, text)}
                       streamingText={aria.streamingText.get(item.session.id)}
+                      machine={obj?.machine}
+                      onSetMachine={(m) => aria.setMachine(item.session.id, m)}
                     />
-                  ))}
+                    );
+                  })}
                 </View>
               </ScrollView>
             </Animated.View>
@@ -919,6 +924,8 @@ export default function App() {
                       onAddChild={() => setCreateParentId(child.id)}
                       onSend={(text) => aria.sendMessage(child.id, text)}
                       streamingText={aria.streamingText.get(child.id)}
+                      machine={child.machine}
+                      onSetMachine={(m) => aria.setMachine(child.id, m)}
                     />
                   ))}
                 </View>

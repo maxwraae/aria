@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { initDb } from '../db/schema.js';
-import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation, createSchedule, listSchedules } from '../db/queries.js';
+import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation, createSchedule, listSchedules, getTreeUnified, getObjectiveUnified, getConversationUnified, getChildrenUnified } from '../db/queries.js';
 import { startEngine } from '../engine/loop.js';
 import { startServer } from '../server/index.js';
 import { isDeepWork } from '../engine/concurrency.js';
@@ -9,7 +9,6 @@ import { validateCreate, validateSucceed, validateFail, validateReject, validate
 import type { Objective, InboxMessage } from '../db/queries.js';
 import { parseInterval } from './parse-interval.js';
 import { execFile } from 'child_process';
-import { remoteTree, remoteShow, remoteCreate, remoteSend, remoteInbox, remoteSucceed, remoteFail, remoteReject, remoteWait, remoteTell, remoteNotify, remoteFind } from './remote.js';
 import { assembleContext } from '../context/assembler.js';
 import { assembleContextV2 } from '../context/assembler-v2.js';
 import personaBrick from '../context/bricks/persona/index.js';
@@ -163,7 +162,7 @@ function formatTimestamp(ts: number): string {
 
 function cmdTree(): void {
   const db = initDb();
-  const objectives = getTree(db);
+  const objectives = getTreeUnified(db);
   const tree = buildTree(objectives);
 
   if (isTTY) {
@@ -182,7 +181,7 @@ function cmdShow(id: string): void {
   }
 
   const db = initDb();
-  const obj = getObjective(db, id);
+  const obj = getObjectiveUnified(db, id);
 
   if (!obj) {
     console.error(`Objective not found: ${id}`);
@@ -190,7 +189,7 @@ function cmdShow(id: string): void {
     process.exit(1);
   }
 
-  const children = getChildren(db, id);
+  const children = getChildrenUnified(db, id);
 
   if (isTTY) {
     console.log(`ID:          ${obj.id}`);
@@ -325,7 +324,7 @@ function cmdInbox(rawArgs: string[]): void {
   const limit = flags['limit'] ? parseInt(flags['limit'] as string, 10) : 50;
 
   const db = initDb();
-  const obj = getObjective(db, id);
+  const obj = getObjectiveUnified(db, id);
 
   if (!obj) {
     console.error(`Objective not found: ${id}`);
@@ -333,7 +332,7 @@ function cmdInbox(rawArgs: string[]): void {
     process.exit(1);
   }
 
-  const messages = getConversation(db, id, limit);
+  const messages = getConversationUnified(db, id).slice(0, limit);
 
   if (isTTY) {
     if (messages.length === 0) {
@@ -830,45 +829,8 @@ function cmdSchedules(rawArgs: string[]): void {
 
 const command = process.argv[2];
 const args = process.argv.slice(3);
-const coordinator = process.env.ARIA_COORDINATOR;
 
-// ── Remote mode (ARIA_COORDINATOR set) ───────────────────────────
-
-if (coordinator) {
-  const REMOTE_COMMANDS: Record<string, (coord: string, args: string[]) => Promise<void>> = {
-    tree:    (c) => remoteTree(c),
-    show:    (c, a) => remoteShow(c, a[0]),
-    create:  (c, a) => remoteCreate(c, a),
-    send:    (c, a) => remoteSend(c, a),
-    inbox:   (c, a) => remoteInbox(c, a),
-    succeed: (c, a) => remoteSucceed(c, a),
-    fail:    (c, a) => remoteFail(c, a),
-    reject:  (c, a) => remoteReject(c, a),
-    wait:    (c, a) => remoteWait(c, a),
-    tell:    (c, a) => remoteTell(c, a),
-    notify:  (c, a) => remoteNotify(c, a),
-    find:    (c, a) => remoteFind(c, a),
-  };
-
-  if (command === undefined || command === '--help' || command === '-h' || command === 'help') {
-    console.log(HELP);
-    console.log(`\n${isTTY ? '\x1b[33m' : ''}Remote mode: ${coordinator}${isTTY ? '\x1b[0m' : ''}`);
-  } else if (command in REMOTE_COMMANDS) {
-    REMOTE_COMMANDS[command](coordinator, args).catch((err: Error) => {
-      console.error(`Error: ${err.message}`);
-      process.exit(1);
-    });
-  } else if (command === 'engine' || command === 'context' || command === 'schedule' || command === 'schedules') {
-    console.error(`Command '${command}' is not available in remote mode.`);
-    process.exit(1);
-  } else {
-    console.error(`Unknown command: ${command}`);
-    console.log(HELP);
-    process.exit(1);
-  }
-} else {
-
-// ── Local mode (default) ─────────────────────────────────────────
+// ── Dispatch ──────────────────────────────────────────────────────
 
 switch (command) {
   case undefined:
@@ -963,5 +925,3 @@ switch (command) {
     console.log(HELP);
     process.exit(1);
 }
-
-} // end local mode
