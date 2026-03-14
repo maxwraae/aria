@@ -8,6 +8,18 @@ type TTSAudioMessage = {
   isLastChunk: boolean;
 };
 
+type BufferedChunk = {
+  audio: string;
+  sampleRate: number;
+};
+
+function base64ToUint8Array(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 function pcm16leToAudioBuffer(
   ctx: AudioContext,
   bytes: Uint8Array,
@@ -26,21 +38,18 @@ function pcm16leToAudioBuffer(
   return buf;
 }
 
-function base64ToUint8Array(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
+/**
+ * Audio player for TTS. Buffers all chunks until isLastChunk,
+ * concatenates into one AudioBuffer, then plays.
+ * Matches the proven Paseo/aiMessage pattern.
+ */
 export function useAudioPlayer() {
   const [speakingId, setSpeakingId] = useState<string | null>(null);
 
   const ctxRef = useRef<AudioContext | null>(null);
-  const queueRef = useRef<AudioBuffer[]>([]);
-  const isPlayingRef = useRef(false);
   const activeSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const currentRequestRef = useRef<string | null>(null);
+  const chunkBufferRef = useRef<BufferedChunk[]>([]);
 
   const ensureContext = useCallback(async (): Promise<AudioContext> => {
     if (ctxRef.current) {
@@ -57,32 +66,8 @@ export function useAudioPlayer() {
     return ctx;
   }, []);
 
-  const playNext = useCallback(() => {
-    const buf = queueRef.current.shift();
-    if (!buf) {
-      isPlayingRef.current = false;
-      activeSourceRef.current = null;
-      setSpeakingId(null);
-      return;
-    }
-
-    const ctx = ctxRef.current;
-    if (!ctx) {
-      isPlayingRef.current = false;
-      setSpeakingId(null);
-      return;
-    }
-
-    const source = ctx.createBufferSource();
-    source.buffer = buf;
-    source.connect(ctx.destination);
-    activeSourceRef.current = source;
-    source.onended = () => playNext();
-    source.start();
-  }, []);
-
   const stop = useCallback(() => {
-    queueRef.current = [];
+    chunkBufferRef.current = [];
     currentRequestRef.current = null;
 
     if (activeSourceRef.current) {
@@ -93,7 +78,6 @@ export function useAudioPlayer() {
       activeSourceRef.current = null;
     }
 
-    isPlayingRef.current = false;
     setSpeakingId(null);
   }, []);
 
@@ -101,21 +85,66 @@ export function useAudioPlayer() {
     // Ignore chunks for a different request
     if (currentRequestRef.current && msg.requestId !== currentRequestRef.current) return;
 
-    const ctx = await ensureContext();
-    const bytes = base64ToUint8Array(msg.audio);
-    const audioBuf = pcm16leToAudioBuffer(ctx, bytes, msg.sampleRate);
+    console.log('[TTS] chunk received, isLast:', msg.isLastChunk, 'buffered:', chunkBufferRef.current.length);
 
-    queueRef.current.push(audioBuf);
+    // Buffer the chunk
+    chunkBufferRef.current.push({ audio: msg.audio, sampleRate: msg.sampleRate });
 
-    if (!isPlayingRef.current) {
-      isPlayingRef.current = true;
-      playNext();
+    // Wait until we have all chunks
+    if (!msg.isLastChunk) return;
+
+    // All chunks received — concatenate and play
+    const chunks = chunkBufferRef.current;
+    chunkBufferRef.current = [];
+
+    console.log('[TTS] all chunks received:', chunks.length, '— concatenating and playing');
+
+    // Decode all chunks to bytes
+    const decodedChunks: Uint8Array[] = [];
+    let totalSize = 0;
+    for (const chunk of chunks) {
+      const bytes = base64ToUint8Array(chunk.audio);
+      decodedChunks.push(bytes);
+      totalSize += bytes.length;
     }
-  }, [ensureContext, playNext]);
+
+    // Concatenate
+    const concatenated = new Uint8Array(totalSize);
+    let offset = 0;
+    for (const chunk of decodedChunks) {
+      concatenated.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    // Play
+    try {
+      const ctx = await ensureContext();
+      const sampleRate = chunks[0]?.sampleRate ?? 24000;
+      const audioBuf = pcm16leToAudioBuffer(ctx, concatenated, sampleRate);
+
+      console.log('[TTS] playing audio, duration:', audioBuf.duration.toFixed(2) + 's');
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuf;
+      source.connect(ctx.destination);
+      activeSourceRef.current = source;
+      source.onended = () => {
+        activeSourceRef.current = null;
+        setSpeakingId(null);
+        currentRequestRef.current = null;
+        console.log('[TTS] playback finished');
+      };
+      source.start();
+    } catch (err) {
+      console.error('[TTS] playback error:', err);
+      setSpeakingId(null);
+      currentRequestRef.current = null;
+    }
+  }, [ensureContext]);
 
   const startSpeaking = useCallback((requestId: string) => {
-    // If already speaking, stop first
     if (currentRequestRef.current) stop();
+    chunkBufferRef.current = [];
     currentRequestRef.current = requestId;
     setSpeakingId(requestId);
   }, [stop]);

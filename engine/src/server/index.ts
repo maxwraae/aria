@@ -1,5 +1,6 @@
 import http from 'http';
 import fs from 'fs';
+import { execSync } from 'node:child_process';
 import path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import Database from 'better-sqlite3';
@@ -689,7 +690,21 @@ export function startServer(
 
   server.listen(port, '0.0.0.0', () => {
     console.log(`[server] Listening on http://0.0.0.0:${port}`);
-    console.log(`[server] For remote access: tailscale serve --bg ${port}`);
+
+    // Automatically ensure Tailscale HTTPS tunnel is active
+    try {
+      const tsPath = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+      if (fs.existsSync(tsPath)) {
+        console.log("[Tailscale] Ensuring HTTPS tunnel is active...");
+        const out = execSync(`"${tsPath}" serve --bg ${port}`).toString();
+        if (out.includes("https://")) {
+          const url = out.match(/https:\/\/[^\s]+/)?.[0];
+          if (url) console.log(`[Tailscale] External HTTPS URL: ${url}`);
+        }
+      }
+    } catch (err) {
+      console.log("[Tailscale] Tunnel auto-start skipped (might need manual login or already running)");
+    }
   });
 
   return server;

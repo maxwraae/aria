@@ -429,7 +429,7 @@ function EditObjectiveOverlay({ name, description, onSubmit, onDismiss }: { name
   );
 }
 
-function FocusOverlay({ onSend, streamingText }: { onSend: (id: string, text: string) => Promise<void>; streamingText: Map<string, string> }) {
+function FocusOverlay({ onSend, streamingText, onSpeak, speakingMessageId }: { onSend: (id: string, text: string) => Promise<void>; streamingText: Map<string, string>; onSpeak?: (text: string) => void; speakingMessageId?: string | null }) {
   const { focusedSession, dismissFocus } = useFocus();
   if (!focusedSession || Platform.OS !== "web") return null;
   return (
@@ -464,6 +464,8 @@ function FocusOverlay({ onSend, streamingText }: { onSend: (id: string, text: st
           scrollEnabled={true}
           onSend={(text) => onSend(focusedSession.id, text)}
           streamingText={streamingText.get(focusedSession.id)}
+          onSpeak={onSpeak}
+          speakingMessageId={speakingMessageId}
           style={{
             flex: 1,
             width: "100%",
@@ -540,11 +542,13 @@ export default function App() {
 
   // Speak handler: if already speaking, stop. Otherwise, start TTS.
   const handleSpeak = useCallback((text: string) => {
+    console.log('[TTS] handleSpeak called, text length:', text.length, 'speakingId:', audioPlayer.speakingId);
     if (audioPlayer.speakingId) {
       audioPlayer.stop();
       return;
     }
     const requestId = aria.sendTTSRequest(text);
+    console.log('[TTS] sent request:', requestId);
     audioPlayer.startSpeaking(requestId);
   }, [audioPlayer, aria]);
 
@@ -591,10 +595,17 @@ export default function App() {
 
   const [heroText, setHeroText] = useState("");
   const [homeChat, setHomeChat] = useState(false);
+  const [mobileChatId, setMobileChatId] = useState<string | null>(null);
   const [createParentId, setCreateParentId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const enterWorkView = useCallback((id: string) => {
+    if (isMobile) {
+      setMobileChatId(id);
+      aria.loadConversation(id);
+      aria.watchObjective(id);
+      return;
+    }
     setCurrentId(id);
     slideAnim.setValue(-40);
     fadeAnim.setValue(0);
@@ -604,7 +615,7 @@ export default function App() {
       Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
       Animated.timing(slideAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
     ]).start();
-  }, [fadeAnim, slideAnim, pushUrl]);
+  }, [isMobile, fadeAnim, slideAnim, pushUrl, aria.loadConversation, aria.watchObjective]);
 
   // Load conversation and subscribe to streaming when entering work view
   useEffect(() => {
@@ -722,7 +733,8 @@ export default function App() {
       <>
         {view === "home" && (
           <View style={[styles.root, Platform.OS === "web" ? { background: tod.gradient, transition: "background 2s ease", animation: "todBreathe 8s ease-in-out infinite" } as any : null]}>
-            {/* Header — home pill left, clock right */}
+            {/* Header — home pill left, clock right (hidden on mobile) */}
+            {!isMobile && (
             <View style={styles.header}>
               <View style={styles.headerInner}>
                 <GlassPill height={36}>
@@ -734,65 +746,95 @@ export default function App() {
                 </View>
               </View>
             </View>
+            )}
 
             {homeChat ? (
               /* ── Home chat mode: hero area replaced by root ChatCard ── */
-              <View style={styles.homeChatContainer as any}>
-                <Pressable
-                  onPress={() => setHomeChat(false)}
-                  style={({ pressed }) => [styles.homeChatDismiss as any, pressed && { opacity: 0.5 }]}
-                >
-                  <Text style={{ color: tod.textColor, fontSize: 14, fontFamily: theme.fonts.sans, fontWeight: "400" as const }}>{"\u2190"}</Text>
-                </Pressable>
-                <ChatCard
-                  session={aria.getSession('quick')}
-                  scrollEnabled={true}
-                  onSend={(text) => aria.sendMessage('quick', text)}
-                  streamingText={aria.streamingText.get('quick')}
-                  style={{ flex: 1, maxWidth: 640, width: "100%" } as any}
-                />
-              </View>
+              isMobile ? (
+                /* Mobile: full-screen overlay */
+                <View style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 250, background: tod.gradient, animation: "chatFadeIn 250ms ease-out both", display: "flex", flexDirection: "column", paddingTop: "env(safe-area-inset-top, 12px)", paddingBottom: "env(safe-area-inset-bottom, 0px)" } as any}>
+                  <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 8 } as any}>
+                    <Pressable
+                      onPress={() => setHomeChat(false)}
+                      style={({ pressed }) => [{ padding: 8 } as any, pressed && { opacity: 0.5 }]}
+                    >
+                      <Text style={{ color: tod.textColor, fontSize: 18, fontFamily: theme.fonts.sans, fontWeight: "400" as const }}>{"\u2190"}</Text>
+                    </Pressable>
+                  </View>
+                  <ChatCard
+                    session={aria.getSession('quick')}
+                    scrollEnabled={true}
+                    onSend={(text) => aria.sendMessage('quick', text)}
+                    streamingText={aria.streamingText.get('quick')}
+                    onSpeak={handleSpeak}
+                    speakingMessageId={audioPlayer.speakingId}
+                    style={{ flex: 1, width: "100%", maxWidth: "none", maxHeight: "none", borderRadius: 0 } as any}
+                  />
+                </View>
+              ) : (
+                /* Desktop: existing homeChatContainer */
+                <View style={styles.homeChatContainer as any}>
+                  <Pressable
+                    onPress={() => setHomeChat(false)}
+                    style={({ pressed }) => [styles.homeChatDismiss as any, pressed && { opacity: 0.5 }]}
+                  >
+                    <Text style={{ color: tod.textColor, fontSize: 14, fontFamily: theme.fonts.sans, fontWeight: "400" as const }}>{"\u2190"}</Text>
+                  </Pressable>
+                  <ChatCard
+                    session={aria.getSession('quick')}
+                    scrollEnabled={true}
+                    onSend={(text) => aria.sendMessage('quick', text)}
+                    streamingText={aria.streamingText.get('quick')}
+                    onSpeak={handleSpeak}
+                    speakingMessageId={audioPlayer.speakingId}
+                    style={{ flex: 1, maxWidth: 640, width: "100%" } as any}
+                  />
+                </View>
+              )
             ) : (
               /* ── Normal home: scrollable hero + strips ── */
+              <>
               <ScrollView
                 style={styles.homeScroll}
-                contentContainerStyle={styles.homeScrollContent}
+                contentContainerStyle={[styles.homeScrollContent, isMobile && { paddingTop: 16, paddingBottom: 100 }]}
                 showsVerticalScrollIndicator={false}
               >
                 {/* Hero — input at center */}
                 <View style={styles.heroContainer}>
                   <View style={styles.heroInner}>
                     <Text style={[styles.heroGreeting, { color: tod.textColor }]}>What are you working on?</Text>
-                    <View style={styles.heroInputWrapper}>
-                      <TextInput
-                        style={styles.heroInput}
-                        value={heroText}
-                        onChangeText={setHeroText}
-                        placeholder="Start something new..."
-                        placeholderTextColor="rgba(0,0,0,0.22)"
-                        onKeyPress={(e: any) => {
-                          if (Platform.OS === "web" && e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
-                            e.preventDefault();
-                            handleHeroSubmit();
-                          }
-                        }}
-                        // @ts-ignore web-only
-                        enterKeyHint="send"
-                      />
-                      {heroText.trim().length > 0 ? (
-                        <Pressable onPress={handleHeroSubmit} style={({ pressed }) => [styles.heroSendBtn, pressed && { opacity: 0.5 }]}>
-                          <Text style={styles.heroSendArrow}>{"\u2191"}</Text>
-                        </Pressable>
-                      ) : (
-                        <View style={styles.heroWaveform}>
-                          {[5, 11, 8, 13, 6].map((h, i) => (
-                            <View key={i} style={{ width: 2, height: h, borderRadius: 1.5, backgroundColor: "rgba(0,0,0,0.25)" }} />
-                          ))}
-                        </View>
-                      )}
-                    </View>
-                    {/* Search results */}
-                    {searchResults.length > 0 && (
+                    {!isMobile && (
+                      <View style={styles.heroInputWrapper}>
+                        <TextInput
+                          style={styles.heroInput}
+                          value={heroText}
+                          onChangeText={setHeroText}
+                          placeholder="Start something new..."
+                          placeholderTextColor="rgba(0,0,0,0.22)"
+                          onKeyPress={(e: any) => {
+                            if (Platform.OS === "web" && e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
+                              e.preventDefault();
+                              handleHeroSubmit();
+                            }
+                          }}
+                          // @ts-ignore web-only
+                          enterKeyHint="send"
+                        />
+                        {heroText.trim().length > 0 ? (
+                          <Pressable onPress={handleHeroSubmit} style={({ pressed }) => [styles.heroSendBtn, pressed && { opacity: 0.5 }]}>
+                            <Text style={styles.heroSendArrow}>{"\u2191"}</Text>
+                          </Pressable>
+                        ) : (
+                          <View style={styles.heroWaveform}>
+                            {[5, 11, 8, 13, 6].map((h, i) => (
+                              <View key={i} style={{ width: 2, height: h, borderRadius: 1.5, backgroundColor: "rgba(0,0,0,0.25)" }} />
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    )}
+                    {/* Search results — desktop only (mobile renders below in fixed bar) */}
+                    {!isMobile && searchResults.length > 0 && (
                       <View style={styles.searchResults}>
                         {searchResults.map((result) => (
                           <Pressable
@@ -820,12 +862,114 @@ export default function App() {
                   </View>
                 </View>
 
-                {/* Needs You strip */}
-                <NeedsYouStrip items={aria.needsYou} onNavigate={(id) => enterWorkView(id)} onExpand={enterNeedsYou} headerColor={tod.textColor} onSend={aria.sendMessage} streamingText={aria.streamingText} />
+                {/* Needs You strip — desktop only */}
+                {!isMobile && <NeedsYouStrip items={aria.needsYou} onNavigate={(id) => enterWorkView(id)} onExpand={enterNeedsYou} headerColor={tod.textColor} onSend={aria.sendMessage} streamingText={aria.streamingText} />}
 
-                {/* Recent Work strip */}
-                <RecentWorkStrip items={aria.recentWork} onNavigate={(id) => enterWorkView(id)} headerColor={tod.textColor} />
+                {/* Recent Work strip — desktop only */}
+                {!isMobile && <RecentWorkStrip items={aria.recentWork} onNavigate={(id) => enterWorkView(id)} headerColor={tod.textColor} />}
               </ScrollView>
+
+              {/* Mobile: fixed input bar pinned to bottom */}
+              {isMobile && (
+                <View style={{
+                  position: "fixed",
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  paddingHorizontal: 32,
+                  paddingTop: 12,
+                  paddingBottom: `calc(28px + env(safe-area-inset-bottom))`,
+                  zIndex: 100,
+                } as any}>
+                  {/* Search results render above input on mobile */}
+                  {searchResults.length > 0 && (
+                    <View style={styles.searchResults}>
+                      {searchResults.map((result) => (
+                        <Pressable
+                          key={result.id}
+                          onPress={() => {
+                            setHeroText("");
+                            setSearchResults([]);
+                            enterWorkView(result.id);
+                          }}
+                          style={({ pressed }) => [styles.searchRow, pressed && { opacity: 0.6 }]}
+                        >
+                          <View style={[styles.searchDot, {
+                            backgroundColor: result.status === 'needs-input' ? 'rgba(0,0,0,0.35)'
+                              : result.status === 'thinking' ? 'hsla(32, 35%, 52%, 1)'
+                              : 'rgba(0,0,0,0.15)',
+                          }]} />
+                          <Text style={styles.searchName} numberOfLines={1}>{result.name}</Text>
+                          {result.description && (
+                            <Text style={styles.searchDesc} numberOfLines={1}>{result.description}</Text>
+                          )}
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
+                  <View style={[styles.heroInputWrapper, {
+                    backgroundColor: "rgba(255,255,255,0.85)",
+                    borderWidth: 1,
+                    borderColor: "rgba(0,0,0,0.08)",
+                    shadowColor: "#000",
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.08,
+                    shadowRadius: 12,
+                    minHeight: 48,
+                  }]}>
+                    <TextInput
+                      style={styles.heroInput}
+                      value={heroText}
+                      onChangeText={setHeroText}
+                      placeholder="Start something new..."
+                      placeholderTextColor="rgba(0,0,0,0.38)"
+                      onKeyPress={(e: any) => {
+                        if (Platform.OS === "web" && e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
+                          e.preventDefault();
+                          handleHeroSubmit();
+                        }
+                      }}
+                      // @ts-ignore web-only
+                      enterKeyHint="send"
+                    />
+                    {heroText.trim().length > 0 ? (
+                      <Pressable onPress={handleHeroSubmit} style={({ pressed }) => [styles.heroSendBtn, pressed && { opacity: 0.5 }]}>
+                        <Text style={styles.heroSendArrow}>{"\u2191"}</Text>
+                      </Pressable>
+                    ) : (
+                      <View style={styles.heroWaveform}>
+                        {[5, 11, 8, 13, 6].map((h, i) => (
+                          <View key={i} style={{ width: 2, height: h, borderRadius: 1.5, backgroundColor: "rgba(0,0,0,0.25)" }} />
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                </View>
+              )}
+              </>
+            )}
+
+            {/* Mobile: full-screen objective chat overlay */}
+            {isMobile && mobileChatId && (
+              <View style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 250, background: tod.gradient, animation: "chatFadeIn 250ms ease-out both", display: "flex", flexDirection: "column", paddingTop: "env(safe-area-inset-top, 12px)", paddingBottom: "env(safe-area-inset-bottom, 0px)" } as any}>
+                <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 8 } as any}>
+                  <Pressable
+                    onPress={() => setMobileChatId(null)}
+                    style={({ pressed }) => [{ padding: 8 } as any, pressed && { opacity: 0.5 }]}
+                  >
+                    <Text style={{ color: tod.textColor, fontSize: 18, fontFamily: theme.fonts.sans, fontWeight: "400" as const }}>{"\u2190"}</Text>
+                  </Pressable>
+                </View>
+                <ChatCard
+                  session={aria.getSession(mobileChatId)}
+                  scrollEnabled={true}
+                  onSend={(text) => aria.sendMessage(mobileChatId, text)}
+                  streamingText={aria.streamingText.get(mobileChatId)}
+                  onSpeak={handleSpeak}
+                  speakingMessageId={audioPlayer.speakingId}
+                  style={{ flex: 1, width: "100%", maxWidth: "none", maxHeight: "none", borderRadius: 0 } as any}
+                />
+              </View>
             )}
           </View>
         )}
@@ -875,6 +1019,8 @@ export default function App() {
                       streamingText={aria.streamingText.get(item.session.id)}
                       machine={obj?.machine}
                       onSetMachine={(m) => aria.setMachine(item.session.id, m)}
+                      onSpeak={handleSpeak}
+                      speakingMessageId={audioPlayer.speakingId}
                     />
                     );
                   })}
@@ -974,6 +1120,8 @@ export default function App() {
                       streamingText={aria.streamingText.get(child.id)}
                       machine={child.machine}
                       onSetMachine={(m) => aria.setMachine(child.id, m)}
+                      onSpeak={handleSpeak}
+                      speakingMessageId={audioPlayer.speakingId}
                     />
                   ))}
                 </View>
@@ -982,7 +1130,7 @@ export default function App() {
 
           </View>
         )}
-        <FocusOverlay onSend={aria.sendMessage} streamingText={aria.streamingText} />
+        <FocusOverlay onSend={aria.sendMessage} streamingText={aria.streamingText} onSpeak={handleSpeak} speakingMessageId={audioPlayer.speakingId} />
         {createParentId && (
           <CreateObjectiveOverlay
             parentId={createParentId}

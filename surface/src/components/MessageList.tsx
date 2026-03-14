@@ -49,6 +49,7 @@ export function MessageList({ messages, scrollEnabled = true, bottomPad = 120, o
       case "agent":
         return (
           <AgentMessage
+            id={item.id}
             text={item.text}
             whisper={item.whisper}
             onSpeak={onSpeak}
