@@ -11,13 +11,18 @@ import { parseInterval } from './parse-interval.js';
 import { execFile, spawn } from 'child_process';
 import { assembleContext } from '../context/assembler.js';
 import personaBrick from '../context/bricks/persona/index.js';
-import contractBrick from '../context/bricks/contract/index.js';
+import ariaBrick from '../context/bricks/contract/index.js';
+import focusBrick from '../context/bricks/focus/index.js';
 import environmentBrick from '../context/bricks/environment/index.js';
 import similarBrick from '../context/bricks/similar/index.js';
-import treeBrick from '../context/bricks/tree/index.js';
+import objectiveBrick from '../context/bricks/objective/index.js';
+import parentsBrick from '../context/bricks/parents/index.js';
+import siblingsBrick from '../context/bricks/siblings/index.js';
+import childrenBrick from '../context/bricks/children/index.js';
 import conversationBrick from '../context/bricks/conversation/index.js';
 import { launchTUI } from '../context/tui/index.js';
 import { loadConfig } from '../context/config.js';
+import { MODELS } from '../context/models.js';
 import fs from 'fs';
 
 // ── Flag parsing ─────────────────────────────────────────────────
@@ -690,7 +695,7 @@ function cmdContext(rawArgs: string[]): void {
     }
 
     const config = loadConfig();
-    const bricks = [personaBrick, contractBrick, environmentBrick, treeBrick, conversationBrick, similarBrick];
+    const bricks = [personaBrick, ariaBrick, environmentBrick, objectiveBrick, parentsBrick, siblingsBrick, childrenBrick, similarBrick, conversationBrick, focusBrick];
     const result = assembleContext(bricks, { db, objectiveId, config: config as unknown as Record<string, unknown> });
     const content = result.content;
 
@@ -708,7 +713,7 @@ function cmdContext(rawArgs: string[]): void {
     }
 
     // Default and --dump: print full assembled context
-    const budget = 80_000;
+    const budget = MODELS.sonnet.contextWindow;
     const tokens = Math.ceil(content.length / 4); // rough estimate
     console.log(color.dim('─'.repeat(60)));
     console.log(color.cyan(`Context Assembly for ${objectiveId.slice(0, 8)} "${obj.objective}"`));
@@ -722,16 +727,64 @@ function cmdContext(rawArgs: string[]): void {
     return;
   }
 
-  // No objective_id: static brick dump (existing behavior)
+  // No objective_id: context window allocation view
   const config = loadConfig();
-  const bricks = [personaBrick, contractBrick, environmentBrick, similarBrick];
+  const bricks = [personaBrick, ariaBrick, environmentBrick, similarBrick];
   const result = assembleContext(bricks, { config: config as unknown as Record<string, unknown> });
+
+  // Add placeholder entries for db-dependent bricks showing their configured caps
+  const rawBricks = (config as unknown as Record<string, unknown>).bricks as Record<string, Record<string, unknown>>;
+
+  const placeholders: Array<{ name: string; type: 'tree' | 'matched' | 'flex'; configKey: string }> = [
+    { name: 'Objective', type: 'tree', configKey: 'objective' },
+    { name: 'Parents', type: 'tree', configKey: 'parents' },
+    { name: 'Siblings', type: 'tree', configKey: 'siblings' },
+    { name: 'Children', type: 'tree', configKey: 'children' },
+    { name: 'Similar', type: 'matched', configKey: 'similar_resolved' },
+    { name: 'Skills', type: 'matched', configKey: 'skills' },
+    { name: 'Memories', type: 'matched', configKey: 'memories' },
+    { name: 'Conversation', type: 'flex', configKey: 'conversation' },
+  ];
+
+  const existingNames = new Set(result.sections.map(s => s.name.toLowerCase()));
+
+  for (const ph of placeholders) {
+    if (existingNames.has(ph.name.toLowerCase())) continue; // already rendered
+    const brickConfig = rawBricks?.[ph.configKey] as Record<string, number> | undefined;
+    const rawMax = brickConfig?.max_tokens;
+    const maxTokens = typeof rawMax === 'object' && rawMax !== null
+      ? (rawMax as Record<string, number>).sonnet ?? Object.values(rawMax as Record<string, number>)[0] ?? 0
+      : (rawMax as number) ?? brickConfig?.per_message_max ?? 0;
+
+    result.sections.push({
+      name: ph.name,
+      type: ph.type,
+      content: `[Placeholder — requires objective context]\nConfigured cap: ${maxTokens.toLocaleString()} tokens`,
+      tokens: maxTokens,
+      meta: {
+        config: brickConfig as Record<string, number> | undefined,
+      },
+    });
+    result.totalTokens += maxTokens;
+  }
+
+  // Focus brick placeholder (closing section)
+  if (!existingNames.has('focus')) {
+    result.sections.push({
+      name: 'Focus',
+      type: 'static',
+      content: '[Placeholder — restates objective + two questions at end of context]\nConfigured: ~100 tokens (fixed)',
+      tokens: 100,
+    });
+    result.totalTokens += 100;
+  }
+
+  const budget = MODELS.sonnet.contextWindow;
 
   if (flags['dump']) {
     // Non-interactive dump to stdout
-    const budget = 80_000;
     console.log(color.dim('─'.repeat(60)));
-    console.log(color.cyan('Context Assembly (static bricks only)'));
+    console.log(color.cyan('Context Window Allocation (all brick slots)'));
     console.log(color.dim('─'.repeat(60)));
 
     for (const section of result.sections) {

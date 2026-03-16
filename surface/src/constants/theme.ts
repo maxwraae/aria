@@ -3,7 +3,9 @@ const FONTS = {
   mono: "ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
 } as const;
 
-const AGENT_FONT_SIZE = 13;
+// Detect mobile via matchMedia (safe for SSR: defaults to desktop)
+const IS_MOBILE = typeof window !== 'undefined' && window.matchMedia?.('(max-width: 640px)').matches;
+const AGENT_FONT_SIZE = IS_MOBILE ? 16 : 13;
 
 export const theme = {
   fonts: FONTS,
@@ -61,7 +63,7 @@ export const theme = {
     },
     /** Code block body text */
     codeBlock: {
-      fontSize: 11,
+      fontSize: IS_MOBILE ? 14 : 11,
       fontFamily: FONTS.mono,
       color: "rgba(0,0,0,0.70)",
       lineHeight: 18,
@@ -80,7 +82,7 @@ export const theme = {
     },
     /** Trace pill label */
     toolPill: {
-      fontSize: 14,
+      fontSize: IS_MOBILE ? 16 : 14,
       fontWeight: "500" as const,
       color: "rgba(0,0,0,0.55)",
       fontFamily: FONTS.sans,
@@ -129,7 +131,7 @@ export const theme = {
     },
     /** Card title in glass pill */
     cardTitle: {
-      fontSize: 14,
+      fontSize: IS_MOBILE ? 17 : 14,
       fontWeight: "600" as const,
       color: "rgba(0,0,0,0.78)",
       fontFamily: FONTS.sans,
@@ -157,7 +159,7 @@ export const theme = {
     },
     /** Card message input field */
     cardInput: {
-      fontSize: 13,
+      fontSize: IS_MOBILE ? 16 : 13,
       lineHeight: 18,
       color: "#000000",
       fontFamily: FONTS.sans,

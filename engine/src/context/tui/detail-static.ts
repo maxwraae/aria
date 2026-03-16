@@ -1,6 +1,6 @@
 import { tui, wrapLines, scrollSlice, scrollIndicator } from './render.js';
 import type { BrickResult } from '../types.js';
-import { BUDGETS } from '../models.js';
+import { MODEL_SPECS } from '../models.js';
 
 /**
  * Renders a full-screen detail view for a static brick.
@@ -16,20 +16,19 @@ export function renderStaticDetail(
   const contentWidth = termWidth - 4; // 2-space margin each side
   const margin = '  ';
 
-  // Budget percentage against all three model budgets
-  const opusPct  = ((brick.tokens / BUDGETS.opus)   * 100).toFixed(1);
-  const sonnetPct = ((brick.tokens / BUDGETS.sonnet) * 100).toFixed(1);
-  const haikuPct  = ((brick.tokens / BUDGETS.haiku)  * 100).toFixed(1);
-  const budgetPct = ((brick.tokens / budget) * 100).toFixed(1);
+  const tokStr = brick.tokens.toLocaleString('en-US');
+  const modelPctStr = MODEL_SPECS.map(m => {
+    const pct = ((brick.tokens / m.contextWindow) * 100).toFixed(1);
+    return `${m.name} ${pct}%`;
+  }).join('  ');
 
-  // Header line: bold name left, type badge + tokens + budget% right
+  // Header line: bold name left, type badge + tokens + model% right
   const name = tui.bold(brick.name.toUpperCase());
   const badge = tui.cyan('[static]');
-  const tokInfo = tui.dim(`${brick.tokens} tok · ${budgetPct}%`);
+  const tokInfo = tui.dim(`${tokStr} tok · ${modelPctStr}`);
   const headerRight = `${badge} ${tokInfo}`;
-  // Measure visible length for alignment (strip ANSI)
   const nameVis = brick.name.toUpperCase().length;
-  const rightVis = '[static]'.length + 1 + `${brick.tokens} tok · ${budgetPct}%`.length;
+  const rightVis = '[static]'.length + 1 + `${tokStr} tok · ${modelPctStr}`.length;
   const gap = contentWidth - nameVis - rightVis;
   const headerLine = gap > 0
     ? name + ' '.repeat(gap) + headerRight

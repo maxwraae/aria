@@ -1,0 +1,76 @@
+{
+  "processed": {
+    "cbf22622-884b-424c-a2d2-711ee730458a.jsonl": {
+      "status": "done",
+      "memories": 14,
+      "chunks": 2,
+      "chunks_empty": 0,
+      "time": 15.878169059753418
+    },
+    "2b669191-78d5-46b1-8400-536fff2735c8.jsonl": {
+      "status": "done",
+      "memories": 0,
+      "chunks": 1,
+      "chunks_empty": 1,
+      "time": 7.923048973083496
+    },
+    "fda0be97-bbf7-466d-854b-ccfe9f6f7fdf.jsonl": {
+      "status": "done",
+      "memories": 1,
+      "chunks": 2,
+      "chunks_empty": 1,
+      "time": 79.40178894996643
+    },
+    "c24d55d7-20c4-4132-9e79-628e90f52940.jsonl": {
+      "status": "done",
+      "memories": 7,
+      "chunks": 2,
+      "chunks_empty": 0,
+      "time": 85.67285084724426
+    },
+    "d27512a9-2d06-41d7-99ef-27d3187e427f.jsonl": {
+      "status": "done",
+      "memories": 0,
+      "chunks": 1,
+      "chunks_empty": 1,
+      "time": 9.033031940460205
+    },
+    "01856dd4-5536-4124-9ea0-45e520fd71da.jsonl": {
+      "status": "done",
+      "memories": 0,
+      "chunks": 1,
+      "chunks_empty": 1,
+      "time": 15.668782711029053
+    },
+    "19f9d4df-6cec-47dc-9ddb-24c8a9144932.jsonl": {
+      "status": "done",
+      "memories": 0,
+      "chunks": 1,
+      "chunks_empty": 1,
+      "time": 75.42603397369385
+    },
+    "abaa5887-c329-4743-b9ab-47f6eb33256b.jsonl": {
+      "status": "done",
+      "memories": 5,
+      "chunks": 2,
+      "chunks_empty": 1,
+      "time": 188.82858109474182
+    },
+    "f94f4b40-cb2e-4f73-a397-e072aab5b7e3.jsonl": {
+      "status": "done",
+      "memories": 0,
+      "chunks": 1,
+      "chunks_empty": 1,
+      "time": 9.20364499092102
+    },
+    "21d9d044-2dfb-4ece-9091-1338713cb123.jsonl": {
+      "status": "done",
+      "memories": 37,
+      "chunks": 10,
+      "chunks_empty": 2,
+      "time": 40.044130086898804
+    }
+  },
+  "started_at": "2026-03-15T22:49:42.508398",
+  "last_updated": "2026-03-15T22:55:29.876941"
+}

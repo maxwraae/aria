@@ -7,14 +7,14 @@ import { countTokens } from "../../tokens.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const contractBrick: Brick = {
-  name: "CONTRACT",
+const ariaBrick: Brick = {
+  name: "ARIA",
   type: "static",
   render(_ctx: BrickContext): BrickResult {
     const raw = readFileSync(join(__dirname, "contract.md"), "utf-8");
-    const content = `# CONTRACT\n\n${raw}`;
+    const content = raw;
     return {
-      name: "CONTRACT",
+      name: "ARIA",
       type: "static" as const,
       content,
       tokens: countTokens(content),
@@ -23,4 +23,4 @@ const contractBrick: Brick = {
   },
 };
 
-export default contractBrick;
+export default ariaBrick;

@@ -5,7 +5,7 @@ import { tui } from './render.js';
 import type { AssemblyResult } from '../assembler.js';
 import type { ContextConfig } from '../config.js';
 import { validateCaps } from '../config.js';
-import { MODEL_SPECS, BUDGETS } from '../models.js';
+import { MODEL_SPECS, MODELS } from '../models.js';
 
 // Strip ANSI escape codes to measure the visible length of a string.
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -44,7 +44,7 @@ export function renderOverview(
 
   function budgetBar(tokens: number): string {
     if (tokens === 0) return ' '.repeat(COL_BAR);
-    const pct = tokens / BUDGETS.opus;
+    const pct = tokens / MODELS.opus.contextWindow;
     const filled = Math.max(1, Math.round(pct * BAR_WIDTH));
     const bar = '█'.repeat(filled);
     const coloredBar = pct < 0.25
@@ -56,9 +56,8 @@ export function renderOverview(
     return padVisible(coloredBar, BAR_WIDTH) + '  ';
   }
 
-  // Each model's budget = contextWindow * fillTarget
   function fmtPct(tokens: number, m: typeof MODEL_SPECS[number]): string {
-    return `${((tokens / m.budget) * 100).toFixed(1)}%`;
+    return `${((tokens / m.contextWindow) * 100).toFixed(1)}%`;
   }
 
   function formatRow(
@@ -125,7 +124,7 @@ export function renderOverview(
   // Cap validation warnings/errors
   const validationLines: string[] = [];
   if (config) {
-    const { warnings, errors } = validateCaps(config, budget);
+    const { warnings, errors } = validateCaps(config);
     for (const w of warnings) {
       validationLines.push(MARGIN + tui.yellow(`⚠ Warning: ${w}`));
     }

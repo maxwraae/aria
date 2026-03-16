@@ -380,6 +380,15 @@ export function createTurn(
   return stmt(db, "getTurn", "SELECT * FROM turns WHERE id = ?").get(id) as Turn;
 }
 
+export function getTurnCount(db: Database.Database, objectiveId: string): number {
+  const row = stmt(
+    db,
+    "getTurnCount",
+    "SELECT COALESCE(MAX(turn_number), 0) as count FROM turns WHERE objective_id = ?"
+  ).get(objectiveId) as { count: number };
+  return row.count;
+}
+
 export function updateTurnSession(
   db: Database.Database,
   turnId: string,
@@ -632,6 +641,65 @@ export function listSchedules(db: Database.Database, objectiveId?: string): Sche
     "listAllSchedules",
     "SELECT * FROM schedules ORDER BY next_at ASC"
   ).all() as Schedule[];
+}
+
+// ── Subtree stats ──────────────────────────────────────────────────
+
+export interface SubtreeStats {
+  childId: string;
+  totalDescendants: number;
+  activeCount: number;       // status = 'active' or 'thinking'
+  resolvedCount: number;     // status = 'resolved'
+  failedCount: number;       // status = 'failed'
+  abandonedCount: number;    // status = 'abandoned'
+  idleCount: number;         // status = 'idle'
+  deepestLevel: number;
+  mostRecentActivity: number; // max(updated_at) across subtree
+}
+
+export function getSubtreeStats(db: Database.Database, parentId: string): Map<string, SubtreeStats> {
+  const rows = db.prepare(`
+    WITH RECURSIVE subtree AS (
+      -- Direct children of parentId (level 1)
+      SELECT id, id AS root_child, 1 AS depth, status, updated_at
+      FROM objectives WHERE parent = ?
+
+      UNION ALL
+
+      -- Descendants, carrying root_child through
+      SELECT o.id, s.root_child, s.depth + 1, o.status, o.updated_at
+      FROM objectives o
+      JOIN subtree s ON o.parent = s.id
+    )
+    SELECT
+      root_child AS childId,
+      COUNT(*) - 1 AS totalDescendants,
+      SUM(CASE WHEN status IN ('active', 'thinking') AND depth > 1 THEN 1 ELSE 0 END) AS activeCount,
+      SUM(CASE WHEN status = 'resolved' AND depth > 1 THEN 1 ELSE 0 END) AS resolvedCount,
+      SUM(CASE WHEN status = 'failed' AND depth > 1 THEN 1 ELSE 0 END) AS failedCount,
+      SUM(CASE WHEN status = 'abandoned' AND depth > 1 THEN 1 ELSE 0 END) AS abandonedCount,
+      SUM(CASE WHEN status = 'idle' AND depth > 1 THEN 1 ELSE 0 END) AS idleCount,
+      MAX(depth) AS deepestLevel,
+      MAX(updated_at) AS mostRecentActivity
+    FROM subtree
+    GROUP BY root_child
+  `).all(parentId) as Array<{
+    childId: string;
+    totalDescendants: number;
+    activeCount: number;
+    resolvedCount: number;
+    failedCount: number;
+    abandonedCount: number;
+    idleCount: number;
+    deepestLevel: number;
+    mostRecentActivity: number;
+  }>;
+
+  const map = new Map<string, SubtreeStats>();
+  for (const row of rows) {
+    map.set(row.childId, row);
+  }
+  return map;
 }
 
 // ── Sync functions ─────────────────────────────────────────────────

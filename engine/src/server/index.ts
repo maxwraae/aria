@@ -689,22 +689,25 @@ export function startServer(
   // ── Start listening ────────────────────────────────────────────
 
   server.listen(port, '0.0.0.0', () => {
-    console.log(`[server] Listening on http://0.0.0.0:${port}`);
-
     // Automatically ensure Tailscale HTTPS tunnel is active
+    let tailscaleUrl: string | null = null;
     try {
       const tsPath = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
       if (fs.existsSync(tsPath)) {
-        console.log("[Tailscale] Ensuring HTTPS tunnel is active...");
         const out = execSync(`"${tsPath}" serve --bg ${port}`).toString();
         if (out.includes("https://")) {
-          const url = out.match(/https:\/\/[^\s]+/)?.[0];
-          if (url) console.log(`[Tailscale] External HTTPS URL: ${url}`);
+          tailscaleUrl = out.match(/https:\/\/[^\s]+/)?.[0] ?? null;
         }
       }
     } catch (err) {
-      console.log("[Tailscale] Tunnel auto-start skipped (might need manual login or already running)");
+      // Tailscale not available or needs manual login
     }
+
+    console.log(`[server] Aria is running`);
+    if (tailscaleUrl) {
+      console.log(`[server]   ${tailscaleUrl}`);
+    }
+    console.log(`[server]   http://localhost:${port}`);
   });
 
   return server;
