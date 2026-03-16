@@ -15,12 +15,16 @@ import { assembleContext } from "../context/assembler.js";
 import personaBrick from "../context/bricks/persona/index.js";
 import contractBrick from "../context/bricks/contract/index.js";
 import environmentBrick from "../context/bricks/environment/index.js";
-import treeBrick from "../context/bricks/tree/index.js";
+import objectiveBrick from "../context/bricks/objective/index.js";
+import parentsBrick from "../context/bricks/parents/index.js";
+import siblingsBrick from "../context/bricks/siblings/index.js";
+import childrenBrick from "../context/bricks/children/index.js";
 import similarBrick from "../context/bricks/similar/index.js";
 import conversationBrick from "../context/bricks/conversation/index.js";
 import { processOutput } from "./output.js";
+import { loadConfig } from "../context/config.js";
 
-const BRICKS = [personaBrick, contractBrick, environmentBrick, treeBrick, similarBrick, conversationBrick];
+const BRICKS = [personaBrick, contractBrick, environmentBrick, objectiveBrick, parentsBrick, siblingsBrick, childrenBrick, similarBrick, conversationBrick];
 
 function formatMessages(
   db: Database.Database,
@@ -52,7 +56,8 @@ export async function spawnTurn(
   const messages = getUnprocessedMessages(db, objectiveId);
 
   // 3. Assemble context → write to temp file
-  const { content } = assembleContext(BRICKS, { db, objectiveId });
+  const config = loadConfig();
+  const { content } = assembleContext(BRICKS, { db, objectiveId, config: config as unknown as Record<string, unknown> });
   const contextPath = `/tmp/aria-context-${objectiveId}.md`;
   fs.writeFileSync(contextPath, content, "utf-8");
 

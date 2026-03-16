@@ -9,6 +9,7 @@ import { FocusProvider, useFocus } from "./context/FocusContext";
 import { useARIA } from "./hooks/useARIA";
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import type { ObjectiveNode } from "./hooks/adapters";
+import { CreateIcon, PlusIcon, PATHS } from "./components/Icons";
 
 // Time-of-day gradient: each period has a top and base color.
 // A subtle CSS breathing animation drifts lightness within the period.
@@ -58,6 +59,10 @@ const BREATHE_CSS = `
 @keyframes chatFadeIn {
   from { opacity: 0; transform: translateY(16px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes searchSlideIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }`;
 
 function useTimeOfDay() {
@@ -81,6 +86,7 @@ function useTimeOfDay() {
   // Text color: same hue as background top, stronger saturation, darker
   const textColor = `hsl(${colors.top[0]}, ${Math.min(colors.top[1] + 12, 40)}%, 45%)`;
   const textColorMuted = `hsl(${colors.top[0]}, ${Math.min(colors.top[1] + 8, 30)}%, 58%)`;
+  const buttonColor = `hsl(${colors.top[0]}, ${Math.min(colors.top[1] + 6, 25)}%, 62%)`;
 
   // Card breathing uses the same hue as the background, more saturated and concentrated
   useEffect(() => {
@@ -91,7 +97,7 @@ function useTimeOfDay() {
     document.documentElement.style.setProperty("--card-breathe-on", `hsla(${h}, ${sat}%, 52%, 0.22)`);
   }, [period]);
 
-  return { gradient, period, textColor, textColorMuted };
+  return { gradient, period, textColor, textColorMuted, buttonColor };
 }
 
 function useClock() {
@@ -130,7 +136,7 @@ const FAVICON_COLORS: Record<TodPeriod, string> = {
   night:     "hsl(220, 20%, 38%)",
 };
 
-const FAVICON_PATH = "M515.89 276.276C501.145 277.413 479.301 280.131 467.39 282.31C309.377 311.213 183.198 430.204 144.996 586.336C136.862 619.578 134.062 643.989 134.001 682.177C133.944 717.907 135.566 734.268 141.473 757.542C148.732 786.148 156.782 798.395 170.82 802.195C178.178 804.187 183.375 803.746 189.527 800.607C196.008 797.301 201.09 791.986 212.886 776.177C227.929 756.018 240.289 741.894 257.255 725.479C315.531 669.096 388.006 631.774 467.39 617.268C494.28 612.354 507.728 611.245 540.39 611.245C563.518 611.245 574.394 611.674 585.39 613.023C635.355 619.15 677.404 631.534 720.39 652.779C779.333 681.91 827.82 722.473 867.894 776.177C879.69 791.986 884.772 797.301 891.253 800.607C897.405 803.746 902.602 804.187 909.96 802.195C923.998 798.395 932.048 786.148 939.307 757.542C945.121 734.635 946.787 717.974 946.796 682.677C946.804 650.881 945.534 635.465 940.779 609.677C930.626 554.61 909.776 503.038 879.234 457.446C811.582 356.455 706.346 292.243 585.39 278.152C572.606 276.663 526.882 275.429 515.89 276.276Z";
+const FAVICON_PATH = PATHS.wave;
 
 function useFavicon() {
   useEffect(() => {
@@ -594,6 +600,8 @@ export default function App() {
   }, [fadeAnim, slideAnim, pushUrl]);
 
   const [heroText, setHeroText] = useState("");
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
   const [homeChat, setHomeChat] = useState(false);
   const [mobileChatId, setMobileChatId] = useState<string | null>(null);
   const [createParentId, setCreateParentId] = useState<string | null>(null);
@@ -616,6 +624,47 @@ export default function App() {
       Animated.timing(slideAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
     ]).start();
   }, [isMobile, fadeAnim, slideAnim, pushUrl, aria.loadConversation, aria.watchObjective]);
+
+  const handleVoiceInput = useCallback(() => {
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+
+    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn('[Voice] Speech recognition not supported');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.continuous = true;
+
+    recognition.onresult = (event: any) => {
+      // Collect all new results since continuous mode appends
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const text = event.results[i]?.[0]?.transcript;
+        if (text && event.results[i].isFinal) {
+          setHeroText((prev: string) => prev ? prev + ' ' + text : text);
+        }
+      }
+    };
+    recognition.onend = () => {
+      // In continuous mode, onend only fires when manually stopped
+      setIsListening(false);
+      recognitionRef.current = null;
+    };
+    recognition.onerror = (e: any) => {
+      console.warn('[Voice] Error:', e.error);
+      setIsListening(false);
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  }, [isListening]);
 
   // Load conversation and subscribe to streaming when entering work view
   useEffect(() => {
@@ -804,39 +853,49 @@ export default function App() {
                   <View style={styles.heroInner}>
                     <Text style={[styles.heroGreeting, { color: tod.textColor }]}>What are you working on?</Text>
                     {!isMobile && (
-                      <View style={styles.heroInputWrapper}>
-                        <TextInput
-                          style={styles.heroInput}
-                          value={heroText}
-                          onChangeText={setHeroText}
-                          placeholder="Start something new..."
-                          placeholderTextColor="rgba(0,0,0,0.22)"
-                          onKeyPress={(e: any) => {
-                            if (Platform.OS === "web" && e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
-                              e.preventDefault();
-                              handleHeroSubmit();
-                            }
-                          }}
-                          // @ts-ignore web-only
-                          enterKeyHint="send"
-                        />
-                        {heroText.trim().length > 0 ? (
-                          <Pressable onPress={handleHeroSubmit} style={({ pressed }) => [styles.heroSendBtn, pressed && { opacity: 0.5 }]}>
-                            <Text style={styles.heroSendArrow}>{"\u2191"}</Text>
+                      <View style={[{ width: "100%", backgroundColor: "#F5F3F0", borderRadius: 14 } as any, searchResults.length > 0 && { borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }]}>
+                        {/* Input row */}
+                        <View style={{ paddingHorizontal: 18, paddingTop: 6 } as any}>
+                          <TextInput
+                            style={styles.heroInput}
+                            value={heroText}
+                            onChangeText={setHeroText}
+                            placeholder="Start something new..."
+                            placeholderTextColor="rgba(0,0,0,0.22)"
+                            multiline
+                            onKeyPress={(e: any) => {
+                              if (Platform.OS === "web" && e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
+                                e.preventDefault();
+                                handleHeroSubmit();
+                              }
+                            }}
+                            // @ts-ignore web-only
+                            enterKeyHint="send"
+                          />
+                        </View>
+                        {/* Action row */}
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingLeft: 12, paddingRight: 6, paddingBottom: 6, paddingTop: 2 } as any}>
+                          <Pressable onPress={() => setCreateParentId('root')} style={({ pressed }) => [{ alignItems: "center", justifyContent: "center" } as any, pressed && { opacity: 0.5 }]}>
+                            <CreateIcon size={28} bg={tod.buttonColor} color="#FFFFFF" />
                           </Pressable>
-                        ) : (
-                          <View style={styles.heroWaveform}>
-                            {[5, 11, 8, 13, 6].map((h, i) => (
-                              <View key={i} style={{ width: 2, height: h, borderRadius: 1.5, backgroundColor: "rgba(0,0,0,0.25)" }} />
-                            ))}
-                          </View>
-                        )}
+                          {heroText.trim().length > 0 ? (
+                            <Pressable onPress={handleHeroSubmit} style={({ pressed }) => [styles.heroSendBtn, { backgroundColor: tod.buttonColor }, pressed && { opacity: 0.5 }]}>
+                              <Text style={styles.heroSendArrow}>{"\u2191"}</Text>
+                            </Pressable>
+                          ) : (
+                            <Pressable onPress={handleVoiceInput} style={({ pressed }) => [styles.heroWaveform, pressed && { opacity: 0.5 }]}>
+                              {[5, 11, 8, 13, 6].map((h, i) => (
+                                <View key={i} style={{ width: 2, height: h, borderRadius: 1.5, backgroundColor: isListening ? "rgba(255,59,48,0.8)" : "rgba(0,0,0,0.25)" }} />
+                              ))}
+                            </Pressable>
+                          )}
+                        </View>
                       </View>
                     )}
-                    {/* Search results — desktop only (mobile renders below in fixed bar) */}
+                    {/* Search results — connected below input */}
                     {!isMobile && searchResults.length > 0 && (
                       <View style={styles.searchResults}>
-                        {searchResults.map((result) => (
+                        {searchResults.map((result, idx) => (
                           <Pressable
                             key={result.id}
                             onPress={() => {
@@ -844,7 +903,7 @@ export default function App() {
                               setSearchResults([]);
                               enterWorkView(result.id);
                             }}
-                            style={({ pressed }) => [styles.searchRow, pressed && { opacity: 0.6 }]}
+                            style={({ pressed }) => [styles.searchRow, pressed && { opacity: 0.6 }, idx === 0 && { borderTopWidth: 1, borderTopColor: "rgba(0,0,0,0.06)" }]}
                           >
                             <View style={[styles.searchDot, {
                               backgroundColor: result.status === 'needs-input' ? 'rgba(0,0,0,0.35)'
@@ -881,10 +940,10 @@ export default function App() {
                   paddingBottom: `calc(28px + env(safe-area-inset-bottom))`,
                   zIndex: 100,
                 } as any}>
-                  {/* Search results render above input on mobile */}
+                  {/* Search results render above input on mobile — connected */}
                   {searchResults.length > 0 && (
-                    <View style={styles.searchResults}>
-                      {searchResults.map((result) => (
+                    <View style={[styles.searchResults, { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderTopLeftRadius: 14, borderTopRightRadius: 14, marginBottom: 0 }]}>
+                      {searchResults.map((result, idx) => (
                         <Pressable
                           key={result.id}
                           onPress={() => {
@@ -892,7 +951,7 @@ export default function App() {
                             setSearchResults([]);
                             enterWorkView(result.id);
                           }}
-                          style={({ pressed }) => [styles.searchRow, pressed && { opacity: 0.6 }]}
+                          style={({ pressed }) => [styles.searchRow, pressed && { opacity: 0.6 }, idx === searchResults.length - 1 && { borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.06)" }]}
                         >
                           <View style={[styles.searchDot, {
                             backgroundColor: result.status === 'needs-input' ? 'rgba(0,0,0,0.35)'
@@ -916,13 +975,17 @@ export default function App() {
                     shadowOpacity: 0.08,
                     shadowRadius: 12,
                     minHeight: 48,
-                  }]}>
+                  }, searchResults.length > 0 && { borderTopLeftRadius: 0, borderTopRightRadius: 0 }]}>
+                    <Pressable onPress={() => setCreateParentId('root')} style={({ pressed }) => [{ width: 38, height: 38, alignItems: "center", justifyContent: "center" } as any, pressed && { opacity: 0.5 }]}>
+                      <Text style={{ fontSize: 20, fontWeight: "300", color: "rgba(0,0,0,0.25)", fontFamily: theme.fonts.sans, lineHeight: 22 }}>+</Text>
+                    </Pressable>
                     <TextInput
                       style={styles.heroInput}
                       value={heroText}
                       onChangeText={setHeroText}
                       placeholder="Start something new..."
                       placeholderTextColor="rgba(0,0,0,0.38)"
+                      multiline
                       onKeyPress={(e: any) => {
                         if (Platform.OS === "web" && e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
                           e.preventDefault();
@@ -937,11 +1000,11 @@ export default function App() {
                         <Text style={styles.heroSendArrow}>{"\u2191"}</Text>
                       </Pressable>
                     ) : (
-                      <View style={styles.heroWaveform}>
+                      <Pressable onPress={handleVoiceInput} style={({ pressed }) => [styles.heroWaveform, pressed && { opacity: 0.5 }]}>
                         {[5, 11, 8, 13, 6].map((h, i) => (
-                          <View key={i} style={{ width: 2, height: h, borderRadius: 1.5, backgroundColor: "rgba(0,0,0,0.25)" }} />
+                          <View key={i} style={{ width: 2, height: h, borderRadius: 1.5, backgroundColor: isListening ? "rgba(255,59,48,0.8)" : "rgba(0,0,0,0.25)" }} />
                         ))}
-                      </View>
+                      </Pressable>
                     )}
                   </View>
                 </View>
@@ -971,6 +1034,7 @@ export default function App() {
                 />
               </View>
             )}
+
           </View>
         )}
         {view === "needs-you" && (
@@ -1098,7 +1162,7 @@ export default function App() {
                     <GlassButton size={38} onPress={() => {
                       if (currentId) setCreateParentId(currentId);
                     }}>
-                      <Text style={styles.plusIcon}>+</Text>
+                      <PlusIcon size={16} color="rgba(0,0,0,0.45)" />
                     </GlassButton>
                   </View>
                 </View>
@@ -1291,7 +1355,7 @@ const styles = StyleSheet.create({
     width: "100%",
     backgroundColor: "#F5F3F0",
     borderRadius: 14,
-    paddingLeft: 18,
+    paddingLeft: 6,
     paddingRight: 6,
     paddingVertical: 6,
     minHeight: 52,
@@ -1305,12 +1369,12 @@ const styles = StyleSheet.create({
     color: "#000000",
     fontFamily: theme.fonts.sans,
     paddingVertical: 8,
-    ...(Platform.OS === "web" ? { outlineStyle: "none" } : {}),
+    ...(Platform.OS === "web" ? { outlineStyle: "none", fieldSizing: "content" } : {}),
   } as any,
   heroSendBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: "rgba(0,0,0,0.10)",
     alignItems: "center",
     justifyContent: "center",
@@ -1355,41 +1419,43 @@ const styles = StyleSheet.create({
   // ── Search results ──
   searchResults: {
     width: "100%",
-    backgroundColor: "rgba(255,255,255,0.72)",
-    ...(Platform.OS === "web" ? {
-      backdropFilter: "blur(20px) saturate(180%)",
-      WebkitBackdropFilter: "blur(20px) saturate(180%)",
-    } : {}),
-    borderRadius: 14,
-    marginTop: 8,
+    backgroundColor: "#F5F3F0",
+    borderBottomLeftRadius: 14,
+    borderBottomRightRadius: 14,
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+    marginTop: 0,
     overflow: "hidden",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    ...(Platform.OS === "web" ? {
+      animation: "searchSlideIn 150ms ease-out",
+    } : {}),
   } as any,
   searchRow: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 18,
-    paddingVertical: 12,
+    paddingVertical: 14,
     gap: 10,
     ...(Platform.OS === "web" ? { cursor: "pointer" } : {}),
   } as any,
   searchDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: theme.typography.cardTitle.fontSize > 15 ? 8 : 6,
+    height: theme.typography.cardTitle.fontSize > 15 ? 8 : 6,
+    borderRadius: theme.typography.cardTitle.fontSize > 15 ? 4 : 3,
   },
   searchName: {
-    fontSize: 14,
+    fontSize: theme.typography.cardTitle.fontSize,
     fontWeight: "500" as const,
     color: "rgba(0,0,0,0.75)",
     fontFamily: theme.fonts.sans,
     flexShrink: 1,
   },
   searchDesc: {
-    fontSize: 13,
+    fontSize: theme.typography.cardInput.fontSize,
     fontWeight: "400" as const,
     color: "rgba(0,0,0,0.35)",
     fontFamily: theme.fonts.sans,

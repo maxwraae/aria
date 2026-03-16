@@ -8,8 +8,9 @@ import { assembleContext } from '../assembler.js';
 import type { Brick } from '../types.js';
 import type { ContextConfig } from '../config.js';
 import { saveConfig } from '../config.js';
+import { MODELS } from '../models.js';
 
-const BUDGET = 80_000;
+const BUDGET = MODELS.sonnet.contextWindow;
 
 type View =
   | { type: 'overview'; selectedIndex: number }

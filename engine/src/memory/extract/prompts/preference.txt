@@ -1,0 +1,16 @@
+Extract preferences and behavioral observations about Max from this conversation.
+Each observation must be a complete, self-contained sentence.
+Rules:
+- No pronouns (he, she, they, it). Use "Max" explicitly.
+- No relative time (yesterday, tomorrow, last week). Use absolute dates or omit dates.
+- Be specific to the actual conversation topic. "Max prefers direct communication" is too generic. "Max prefers short back-and-forth exchanges over monologues when brainstorming" is specific.
+- ONLY extract preferences demonstrated in this conversation, not general assumptions.
+- Include explicit instructions Max gave (things Max told the AI to do or not do).
+- Each observation should help an AI assistant work better with Max in the future.
+- You may return an empty array if nothing is worth extracting.
+
+Return ONLY a valid JSON array. No other text.
+
+[{"content": "", "type": "preference"}]
+
+CONVERSATION:

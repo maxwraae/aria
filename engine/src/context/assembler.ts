@@ -1,5 +1,5 @@
 import type { Brick, BrickContext, BrickResult } from "./types.js";
-import { BUDGETS } from "./models.js";
+import { MODELS } from "./models.js";
 
 export interface AssemblyResult {
   sections: BrickResult[];
@@ -7,7 +7,7 @@ export interface AssemblyResult {
   content: string;
 }
 
-const DEFAULT_BUDGET = BUDGETS.sonnet;
+const DEFAULT_BUDGET = MODELS.sonnet.contextWindow;
 
 export function assembleContext(
   bricks: Brick[],

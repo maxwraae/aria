@@ -8,14 +8,15 @@ import {
   Platform,
 } from "react-native";
 import { theme } from "../constants/theme";
+import { PlusIcon } from "./Icons";
 import { MessageList } from "./MessageList";
 import { GlassButton } from "./Glass";
 import type { ChatMessage, ChatSession } from "../types/chat";
 import { useFocus } from "../context/FocusContext";
 
 /** Compact waveform icon for card input */
-function WaveformSmall() {
-  const c = "rgba(0,0,0,0.25)";
+function WaveformSmall({ active = false }: { active?: boolean }) {
+  const c = active ? "rgba(255,59,48,0.8)" : "rgba(0,0,0,0.25)";
   return (
     <View style={waveStyles.container}>
       <View style={[waveStyles.bar, { height: 5, backgroundColor: c }]} />
@@ -81,6 +82,34 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
   const [inputHeight, setInputHeight] = useState(20);
   const cardRef = useRef<View>(null);
   const [editing, setEditing] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  const handleVoiceInput = useCallback(() => {
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+    const SR = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+    if (!SR) return;
+    const recognition = new SR();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.continuous = true;
+    recognition.onresult = (event: any) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i]?.[0]?.transcript;
+        if (t && event.results[i].isFinal) {
+          setText((prev: string) => prev ? prev + ' ' + t : t);
+        }
+      }
+    };
+    recognition.onend = () => { setIsListening(false); recognitionRef.current = null; };
+    recognition.onerror = () => { setIsListening(false); recognitionRef.current = null; };
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  }, [isListening]);
   const [editText, setEditText] = useState(session.name);
   const [headerHovered, setHeaderHovered] = useState(false);
 
@@ -264,7 +293,7 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
         </GlassButton>
         {onAddChild && (
           <GlassButton size={32} onPress={onAddChild}>
-            <Text style={styles.checkIcon}>+</Text>
+            <PlusIcon size={14} color="rgba(0,0,0,0.45)" />
           </GlassButton>
         )}
       </Pressable>
@@ -300,8 +329,8 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
               <Text style={styles.sendArrow}>{"\u2191"}</Text>
             </Pressable>
           ) : (
-            <Pressable style={({ pressed }) => [styles.inputBtn, pressed && styles.btnPressed]}>
-              <WaveformSmall />
+            <Pressable onPress={handleVoiceInput} style={({ pressed }) => [styles.inputBtn, pressed && styles.btnPressed]}>
+              <WaveformSmall active={isListening} />
             </Pressable>
           )}
         </View>

@@ -1,0 +1,43 @@
+# You learn about people from conversations
+
+You are reading a conversation between a person named Max and his AI assistant. Your job is to find the people who appear and what you learn about them.
+
+## What this is
+
+Conversations are full of people. Some are mentioned by name. Some play a central role in what's being discussed. Some appear once in passing. Every time a person shows up, there's a chance to learn something about who they are.
+
+You're building a contacts book from overheard conversations. Not the kind with just names and phone numbers. The kind where you actually know something about each person. Who they are, what they do, how they connect to Max, what role they play in his life or work.
+
+## How to tell the difference from other facts
+
+"Knud Højgaard's Foundation approved 30,000 DKK" is a fact about the world. "Henrik Bengtsson is a Senior Innovation Lead at Novo Nordisk's Bio Innovation Hub in Boston" is a fact about a person. "Max is studying biotechnology at Copenhagen University" is a fact about Max. You're looking for the middle one. Facts about other people.
+
+The richest observations combine who someone is with how they relate to Max. "Henrik connected Max to the Abudayyeh-Gootenberg lab at Harvard and wrote a letter of recommendation for his Rigmor application" tells you about Henrik and about the relationship in one breath. That's more useful than "Henrik works at Novo Nordisk" and "Henrik helped Max" as two separate fragments.
+
+## What counts
+
+- Names, titles, roles, where they work, what they do
+- How they connect to Max. Advisor, friend, collaborator, family, contact
+- What they've done that matters. Wrote a recommendation, introduced Max to someone, co-authored something
+- Contact information if mentioned. Email addresses, phone numbers, affiliations
+- Personality or working style if it comes through. "Henrik pushes for methodology detail in writing"
+- Relationships between people, not just to Max. "Cordelia is Max's mother" or "Emil works with Thomas at Bactolife"
+
+## What to skip
+
+- Max himself (that's a different extraction)
+- Organizations, companies, or institutions without a specific person attached
+- The AI assistant (not a person)
+- People mentioned so briefly that you learn nothing about them beyond a name
+
+## How to write each observation
+
+Each observation should make the person real to someone who's never heard of them. Lead with the full name if you have it. Combine everything you learn about one person into a single rich statement rather than splitting them into fragments. Use Max's name when describing the relationship, never "the user."
+
+If someone appears multiple times in the conversation and you learn different things each time, combine it all into one observation.
+
+# Return a JSON array of strings. If no people appear in this conversation, return [].
+
+---
+
+<conversation>

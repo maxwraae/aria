@@ -1,32 +1,27 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { MODELS } from './models.js';
 
 export interface ContextConfig {
-  fill_target: {
-    default: number;
-    haiku: number;
-    opus: number;
-  };
   bricks: {
     siblings: { max_items: number; max_tokens: number };
     children: { max_detailed: number; max_oneliner: number; max_tokens: number };
     similar_resolved: { max_results: number; max_tokens: number };
     skills: { max_tokens: number };
     memories: { max_results: number; max_tokens: number };
-    conversation: { per_message_max: number };
+    conversation: { per_message_max: number; max_tokens: number | Record<string, number> };
   };
 }
 
 const DEFAULT_CONFIG: ContextConfig = {
-  fill_target: { default: 0.40, haiku: 0.30, opus: 0.50 },
   bricks: {
     siblings:         { max_items: 15, max_tokens: 2000 },
     children:         { max_detailed: 5, max_oneliner: 15, max_tokens: 5000 },
     similar_resolved: { max_results: 3, max_tokens: 3000 },
     skills:           { max_tokens: 3000 },
     memories:         { max_results: 20, max_tokens: 3000 },
-    conversation:     { per_message_max: 1000 },
+    conversation:     { per_message_max: 2000, max_tokens: { opus: 200000, sonnet: 80000, haiku: 80000 } },
   },
 };
 
@@ -63,10 +58,18 @@ export function saveConfig(config: ContextConfig): void {
 
 export function validateCaps(
   config: ContextConfig,
-  budget: number,
 ): { warnings: string[]; errors: string[] } {
   const warnings: string[] = [];
   const errors: string[] = [];
+
+  const smallestWindow = Math.min(
+    ...Object.values(MODELS).map(m => m.contextWindow),
+  );
+
+  const convConfig = config.bricks.conversation;
+  const convMax = typeof convConfig.max_tokens === 'number'
+    ? convConfig.max_tokens
+    : Math.min(...Object.values(convConfig.max_tokens));
 
   const brickTokenSums = [
     config.bricks.siblings.max_tokens,
@@ -74,18 +77,19 @@ export function validateCaps(
     config.bricks.similar_resolved.max_tokens,
     config.bricks.skills.max_tokens,
     config.bricks.memories.max_tokens,
+    convMax,
   ];
 
   const total = brickTokenSums.reduce((a, b) => a + b, 0);
-  const pct = total / budget;
+  const pct = total / smallestWindow;
 
   if (pct >= 0.80) {
     errors.push(
-      `Brick token caps sum to ${total} (${(pct * 100).toFixed(0)}% of budget ${budget}) — exceeds 80% threshold`,
+      `Brick token caps sum to ${total} (${(pct * 100).toFixed(0)}% of smallest window ${smallestWindow}) — exceeds 80% threshold`,
     );
   } else if (pct >= 0.50) {
     warnings.push(
-      `Brick token caps sum to ${total} (${(pct * 100).toFixed(0)}% of budget ${budget}) — exceeds 50% threshold`,
+      `Brick token caps sum to ${total} (${(pct * 100).toFixed(0)}% of smallest window ${smallestWindow}) — exceeds 50% threshold`,
     );
   }
 

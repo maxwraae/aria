@@ -74,7 +74,7 @@ describe("assembleContext", () => {
     expect(result.content).toBe("");
   });
 
-  it("uses default budget of 80000", () => {
+  it("uses default budget of Sonnet context window (200K)", () => {
     let capturedBudget = 0;
     const spy: Brick = {
       name: "SPY",
@@ -85,7 +85,7 @@ describe("assembleContext", () => {
       },
     };
     assembleContext([spy]);
-    expect(capturedBudget).toBe(80_000);
+    expect(capturedBudget).toBe(200_000);
   });
 
   it("passes custom context through", () => {

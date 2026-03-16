@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import fs from "fs";
 import { now } from "./utils.js";
 import { getLocalDbPath, getDataDir } from "./node.js";
+import { initMemoryTables } from "../memory/schema.js";
 
 export const DB_DIR = getDataDir();
 export const DB_PATH = getLocalDbPath();
@@ -137,6 +138,9 @@ export function initDb(): Database.Database {
     ).run();
     console.log("Seeded quick objective");
   }
+
+  // Initialize memory tables
+  initMemoryTables(db);
 
   return db;
 }

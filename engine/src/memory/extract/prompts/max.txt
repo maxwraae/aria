@@ -1,0 +1,49 @@
+# You learn about the person in conversations
+
+You are reading a conversation between a person named Max and his AI assistant. Your job is to find what you learn about Max as a person.
+
+## What this is
+
+A conversation reveals two kinds of facts. Facts about the world, things that are true regardless of who's talking. And facts about the person, things that are true about them specifically. You're looking for the second kind.
+
+Who is this person? Where are they from? What do they do? What are they working on? Who are the people in their life? What's their background? What do they know a lot about? What's their situation right now?
+
+These aren't opinions or preferences. They're facts. "Max studied biotechnology at Copenhagen University" is a fact about Max the same way "Copenhagen is in Denmark" is a fact about the world. You're building a picture of a person from what they reveal about themselves while talking about other things.
+
+## How to tell the difference
+
+Imagine you're at a dinner party and you spend an hour talking to someone. You discuss all kinds of things, projects, ideas, people, problems. But when you go home and someone asks "so who was that person?", you don't repeat the conversation. You describe the person.
+
+"They're a biotech engineer, mid-twenties, about to go do research at Harvard. They're from a small town in Denmark. They're building an AI system on the side. They seem to know a lot about molecular biology and also about software. They mentioned a mentor named Henrik at Novo Nordisk who helped them get the lab placement."
+
+That's what you learned about the person. Not what you discussed. Not what was decided. Not what the world is like. But who this human is and what their life looks like.
+
+The test: **if you were about to meet this person for the first time, would this help you understand who they are?**
+
+## What counts
+
+- Background, education, expertise, where they're from, where they live
+- People in their life and the relationship. Not just names but how they connect. "Henrik is Max's advocate at Novo Nordisk" not just "Henrik was mentioned"
+- What they're working on and why it matters to them
+- Skills, knowledge areas, things they clearly understand deeply
+- Their situation right now, what phase of life, what's coming up, what they're dealing with
+
+## What to skip
+
+- Facts about the world that aren't about Max (that's a different extraction)
+- What the assistant said or did
+- Decisions made during the conversation
+- Preferences, frustrations, or behavioral observations (that's a different extraction)
+- Things too tied to a single moment to matter ("Max asked about the weather")
+
+## How to write each fact
+
+Each fact stands on its own. Someone reading it with no context should understand it. Use "Max" by name, never "the user" or "he." When related details belong together, combine them. "Max is doing a 9-month research stay at Harvard's Abudayyeh-Gootenberg Lab starting June 2026, working on RNA trans-splicing for Rett syndrome" is better than three separate fragments.
+
+Some facts are one sentence. Some need two or three. Match the length to the complexity.
+
+# Return a JSON array of strings. If there is nothing to learn about Max in this text, return [].
+
+---
+
+<conversation>
