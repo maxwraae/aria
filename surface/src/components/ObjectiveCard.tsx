@@ -19,6 +19,8 @@ export interface ObjectiveCardData {
 interface ObjectiveCardProps {
   data: ObjectiveCardData;
   onPress?: () => void;
+  /** Dynamic time-of-day color for the objective title */
+  titleColor?: string;
 }
 
 function dotColor(status: ObjectiveChild["status"]): string {
@@ -28,7 +30,7 @@ function dotColor(status: ObjectiveChild["status"]): string {
   return theme.status.idle.dot;
 }
 
-export function ObjectiveCard({ data, onPress }: ObjectiveCardProps) {
+export function ObjectiveCard({ data, onPress, titleColor }: ObjectiveCardProps) {
   const cardRef = useRef<View>(null);
 
   // Route horizontal wheel to parent horizontal scroll
@@ -68,7 +70,7 @@ export function ObjectiveCard({ data, onPress }: ObjectiveCardProps) {
 
         {/* Header — solid background, tinted by status */}
         <View style={[styles.header, { backgroundColor: headerTint || "rgba(0,0,0,0.03)" }]}>
-          <Text style={styles.title} numberOfLines={1}>{data.name}</Text>
+          <Text style={[styles.title, titleColor ? { color: titleColor } : undefined]} numberOfLines={1}>{data.name}</Text>
           <View style={{ flex: 1 }} />
           {totalCount > 0 && (
             <Text style={styles.count}>{totalCount}</Text>

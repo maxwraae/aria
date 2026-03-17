@@ -65,13 +65,17 @@ interface ChatCardProps {
   machine?: string | null;
   /** Called when user toggles machine assignment */
   onSetMachine?: (machine: string | null) => void;
+  /** Called when user clicks the model badge to cycle model */
+  onSetModel?: (model: string) => void;
   /** Called when user clicks speak on an agent message */
   onSpeak?: (text: string) => void;
   /** ID of the message currently being spoken */
   speakingMessageId?: string | null;
+  /** Dynamic time-of-day color for the objective title */
+  titleColor?: string;
 }
 
-export function ChatCard({ session, focused = false, style, onDescend, onResolve, onAddChild, onRename, childCount = 0, resolvedCount = 0, scrollEnabled = true, urgent, important, onSend, streamingText, machine, onSetMachine, onSpeak, speakingMessageId }: ChatCardProps) {
+export function ChatCard({ session, focused = false, style, onDescend, onResolve, onAddChild, onRename, childCount = 0, resolvedCount = 0, scrollEnabled = true, urgent, important, onSend, streamingText, machine, onSetMachine, onSetModel, onSpeak, speakingMessageId, titleColor }: ChatCardProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(session.messages);
 
   // Sync messages when the parent refreshes session.messages (e.g. after API reply loads)
@@ -250,7 +254,7 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
                 {resolvedCount > 0 ? `${resolvedCount}/${childCount}` : `${childCount}`}
               </Text>
             )}
-            <Text style={styles.title} numberOfLines={1}>
+            <Text style={[styles.title, titleColor ? { color: titleColor } : undefined]} numberOfLines={1}>
               {session.name}
             </Text>
           </>
@@ -267,11 +271,22 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
           </Text>
         )}
         <View style={{ flex: 1 }} />
-        {session.model && (
+        {session.model && onSetModel ? (
+          <Pressable
+            onPress={() => {
+              onSetModel(session.model === 'haiku' ? 'sonnet' : 'haiku');
+            }}
+            style={[Platform.OS === 'web' ? { cursor: 'pointer' } as any : undefined]}
+          >
+            <Text style={styles.modelBadge}>
+              {session.model === 'haiku' ? 'H' : 'O'}
+            </Text>
+          </Pressable>
+        ) : session.model ? (
           <Text style={styles.modelBadge}>
-            {session.model === 'opus' ? 'O' : session.model === 'haiku' ? 'H' : 'S'}
+            {session.model === 'haiku' ? 'H' : 'O'}
           </Text>
-        )}
+        ) : null}
         {onSetMachine && (
           <Pressable
             onPress={() => onSetMachine(machine === 'macbook' ? null : 'macbook')}

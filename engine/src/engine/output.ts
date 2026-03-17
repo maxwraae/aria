@@ -7,6 +7,7 @@ import {
   getObjective,
   insertMessage,
   updateStatus,
+  updateLastError,
 } from "../db/queries.js";
 import { isWorker, getCoordinatorUrl } from "../db/node.js";
 
@@ -25,6 +26,9 @@ export function processOutput(
   const tag = objectiveId.slice(0, 8);
   let lastAssistantText = "";
   let buffer = "";
+  // Capture last N stderr lines for diagnostics on silent failure
+  const MAX_STDERR_LINES = 20;
+  const stderrLines: string[] = [];
 
   // ── NDJSON line parser ───────────────────────────────────────────
 
@@ -119,7 +123,14 @@ export function processOutput(
   });
 
   proc.stderr?.on("data", (chunk: Buffer) => {
-    process.stderr.write(`[${tag}] ${chunk}`);
+    const text = chunk.toString();
+    process.stderr.write(`[${tag}] ${text}`);
+    // Capture lines for diagnostics, trimming the ring buffer
+    const newLines = text.split("\n").filter(l => l.trim());
+    for (const line of newLines) {
+      stderrLines.push(line);
+      if (stderrLines.length > MAX_STDERR_LINES) stderrLines.shift();
+    }
   });
 
   // ── Turn completion ──────────────────────────────────────────────
@@ -133,11 +144,28 @@ export function processOutput(
     const obj = getObjective(db, objectiveId);
     const currentStatus = obj?.status ?? "thinking";
 
-    // 2. If still 'thinking', fall back to 'needs-input'
+    // 2. If still 'thinking', fall back to 'needs-input' and record diagnostics
     if (currentStatus === "thinking") {
       updateStatus(db, objectiveId, "needs-input");
+
+      // Build error context: last assistant text + last stderr lines
+      const parts: string[] = [];
+      if (code !== 0 && code !== null) {
+        parts.push(`Exit code: ${code}`);
+      }
+      if (lastAssistantText) {
+        const snippet = lastAssistantText.slice(-500);
+        parts.push(`Last agent output:\n${snippet}`);
+      } else if (stderrLines.length > 0) {
+        parts.push(`Last stderr:\n${stderrLines.join("\n")}`);
+      } else {
+        parts.push("Agent exited without producing output or changing status.");
+      }
+      const errorContext = parts.join("\n\n");
+      updateLastError(db, objectiveId, errorContext);
+
       process.stderr.write(
-        `[${tag}] Turn complete, status: needs-input\n`
+        `[${tag}] Turn complete, status: needs-input (silent failure captured)\n`
       );
     } else {
       process.stderr.write(

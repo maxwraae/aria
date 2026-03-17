@@ -15,6 +15,7 @@ export interface Objective {
   status: string;
   waiting_on: string | null;
   resolution_summary: string | null;
+  last_error: string | null;
   important: number;
   urgent: number;
   model: string;
@@ -186,7 +187,7 @@ export function clearWaitingOn(db: Database.Database, id: string): void {
   ).run(id);
 }
 
-export function updateObjective(db: Database.Database, id: string, fields: { objective?: string; description?: string; machine?: string | null }): void {
+export function updateObjective(db: Database.Database, id: string, fields: { objective?: string; description?: string; machine?: string | null; model?: string }): void {
   const ts = now();
   if (fields.objective !== undefined) {
     stmt(db, "updateObjectiveName", "UPDATE objectives SET objective = ?, updated_at = ? WHERE id = ?").run(fields.objective, ts, id);
@@ -198,6 +199,9 @@ export function updateObjective(db: Database.Database, id: string, fields: { obj
   }
   if (fields.machine !== undefined) {
     stmt(db, "updateObjectiveMachine", "UPDATE objectives SET machine = ?, updated_at = ? WHERE id = ?").run(fields.machine, ts, id);
+  }
+  if (fields.model !== undefined) {
+    stmt(db, "updateObjectiveModel", "UPDATE objectives SET model = ?, updated_at = ? WHERE id = ?").run(fields.model, ts, id);
   }
 }
 
@@ -252,6 +256,15 @@ export function incrementFailCount(db: Database.Database, id: string): number {
     id
   ) as { fail_count: number } | undefined;
   return row?.fail_count ?? 0;
+}
+
+export function updateLastError(db: Database.Database, id: string, error: string): void {
+  const ts = now();
+  stmt(
+    db,
+    "updateLastError",
+    "UPDATE objectives SET last_error = ?, updated_at = ? WHERE id = ?"
+  ).run(error, ts, id);
 }
 
 export function searchObjectives(db: Database.Database, query: string): Objective[] {
