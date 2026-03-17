@@ -48,6 +48,11 @@ export function initDb(): Database.Database {
     db.exec("ALTER TABLE objectives ADD COLUMN machine TEXT");
   }
 
+  // Migration: add last_error column if missing
+  if (!cols.some((c) => c.name === "last_error")) {
+    db.exec("ALTER TABLE objectives ADD COLUMN last_error TEXT");
+  }
+
   // FTS5 virtual tables don't support IF NOT EXISTS, so check manually
   const ftsExists = db
     .prepare(

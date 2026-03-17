@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { readFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
+import { execSync } from 'child_process';
 import {
   getPendingObjectives,
   getStuckObjectives,
@@ -9,6 +10,7 @@ import {
   cascadeAbandon,
   incrementFailCount,
   insertMessage,
+  getObjective,
   getReadySchedules,
   deleteSchedule,
   bumpSchedule,
@@ -160,12 +162,31 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
         const failCount = incrementFailCount(db, obj.id);
         if (failCount >= MAX_FAIL_COUNT) {
           updateStatus(db, obj.id, 'needs-input');
+
+          // Fetch latest state to get last_error context
+          const latest = getObjective(db, obj.id);
+          const lastError = latest?.last_error ?? '';
+          const errorSnippet = lastError
+            ? lastError.slice(0, 300).replace(/\n/g, ' ').trim()
+            : 'No diagnostic info captured.';
+
           insertMessage(db, {
             objective_id: obj.id,
-            message: `[system] This objective has failed ${failCount} times. Needs your attention.`,
+            message: `[system] This objective has failed ${failCount} times and needs your attention.\n\nLast error: ${errorSnippet}`,
             sender: 'system',
           });
           console.log(`[engine] ${obj.id.slice(0, 8)} stuck ${failCount} times, set to needs-input`);
+
+          // Notify Max via aria notify
+          try {
+            const shortId = obj.id.slice(0, 8);
+            const name = obj.objective.slice(0, 60);
+            const notifyMsg = `"${name}" (${shortId}) stuck after ${failCount} failures. ${errorSnippet.slice(0, 120)}`;
+            execSync(`aria notify ${JSON.stringify(notifyMsg)} --important --urgent`, { timeout: 10000 });
+            console.log(`[engine] Notified Max about stuck objective ${shortId}`);
+          } catch (notifyErr) {
+            console.error('[engine] aria notify failed:', notifyErr);
+          }
         } else {
           updateStatus(db, obj.id, 'idle');
           console.log(`[engine] ${obj.id.slice(0, 8)} stuck, reset to idle (fail ${failCount}/${MAX_FAIL_COUNT})`);

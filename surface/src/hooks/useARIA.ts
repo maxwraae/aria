@@ -34,7 +34,7 @@ export interface UseARIAReturn {
   loadConversation: (id: string) => Promise<void>;
   sendMessage: (objectiveId: string, text: string) => Promise<void>;
   createObjective: (parent: string, objective: string, instructions?: string) => Promise<string | null>;
-  updateObjective: (id: string, fields: { objective?: string; description?: string }) => Promise<void>;
+  updateObjective: (id: string, fields: { objective?: string; description?: string; model?: string }) => Promise<void>;
   setMachine: (id: string, machine: string | null) => Promise<void>;
   watchObjective: (objectiveId: string) => void;
   sendTTSRequest: (text: string) => string;
@@ -221,7 +221,7 @@ export function useARIA(): UseARIAReturn {
     }
   }, [refreshTree]);
 
-  const updateObj = useCallback(async (id: string, fields: { objective?: string; description?: string }) => {
+  const updateObj = useCallback(async (id: string, fields: { objective?: string; description?: string; model?: string }) => {
     try {
       await fetch(`/api/objectives/${id}`, {
         method: 'PATCH',

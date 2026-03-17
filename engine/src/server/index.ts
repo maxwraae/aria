@@ -132,8 +132,8 @@ export function startServer(
         req.on('data', (chunk: Buffer) => { body += chunk; });
         req.on('end', () => {
           try {
-            const { objective, description, machine } = JSON.parse(body);
-            updateObjective(db, patchParams.id, { objective, description, machine });
+            const { objective, description, machine, model } = JSON.parse(body);
+            updateObjective(db, patchParams.id, { objective, description, machine, model });
             const updated = getObjective(db, patchParams.id);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(updated));

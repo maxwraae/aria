@@ -4,6 +4,7 @@ import { ChatCard } from "./components/ChatCard";
 import { GlassButton, GlassPill } from "./components/Glass";
 import { NeedsYouStrip } from "./components/NeedsYouStrip";
 import { RecentWorkStrip } from "./components/RecentWorkStrip";
+import { ProjectsStrip } from "./components/ProjectsStrip";
 import { theme } from "./constants/theme";
 import { FocusProvider, useFocus } from "./context/FocusContext";
 import { useARIA } from "./hooks/useARIA";
@@ -86,7 +87,7 @@ function useTimeOfDay() {
   // Text color: same hue as background top, stronger saturation, darker
   const textColor = `hsl(${colors.top[0]}, ${Math.min(colors.top[1] + 12, 40)}%, 45%)`;
   const textColorMuted = `hsl(${colors.top[0]}, ${Math.min(colors.top[1] + 8, 30)}%, 58%)`;
-  const buttonColor = `hsl(${colors.top[0]}, ${Math.min(colors.top[1] + 6, 25)}%, 62%)`;
+  const buttonColor = `hsl(${colors.top[0]}, ${Math.min(colors.top[1] + 10, 35)}%, 55%)`;
 
   // Card breathing uses the same hue as the background, more saturated and concentrated
   useEffect(() => {
@@ -176,8 +177,9 @@ function findPathById(node: ObjectiveNode | null, targetId: string, path: Object
   return null;
 }
 
-function CreateObjectiveOverlay({ parentId, onSubmit, onDismiss }: { parentId: string; onSubmit: (parentId: string, name: string) => void; onDismiss: () => void }) {
+function CreateObjectiveOverlay({ parentId, onSubmit, onDismiss }: { parentId: string; onSubmit: (parentId: string, name: string, description?: string) => void; onDismiss: () => void }) {
   const [value, setValue] = useState("");
+  const [description, setDescription] = useState("");
   const inputRef = useRef<TextInput>(null);
 
   useEffect(() => {
@@ -189,7 +191,7 @@ function CreateObjectiveOverlay({ parentId, onSubmit, onDismiss }: { parentId: s
   const handleSubmit = () => {
     const trimmed = value.trim();
     if (trimmed) {
-      onSubmit(parentId, trimmed);
+      onSubmit(parentId, trimmed, description.trim() || undefined);
       onDismiss();
     }
   };
@@ -268,6 +270,26 @@ function CreateObjectiveOverlay({ parentId, onSubmit, onDismiss }: { parentId: s
                 fontFamily: theme.fonts.sans,
                 paddingVertical: 8,
                 ...(Platform.OS === "web" ? { outlineStyle: "none" } : {}),
+              } as any}
+            />
+            <TextInput
+              value={description}
+              onChangeText={setDescription}
+              placeholder="Description (optional)"
+              placeholderTextColor="rgba(0,0,0,0.18)"
+              multiline
+              onKeyPress={(e: any) => {
+                if (Platform.OS === "web" && e.nativeEvent.key === "Escape") {
+                  onDismiss();
+                }
+              }}
+              style={{
+                fontSize: 14,
+                fontWeight: "400" as const,
+                color: "rgba(0,0,0,0.7)",
+                fontFamily: theme.fonts.sans,
+                paddingVertical: 6,
+                ...(Platform.OS === "web" ? { outlineStyle: "none", fieldSizing: "content" } : {}),
               } as any}
             />
           </View>
@@ -435,7 +457,7 @@ function EditObjectiveOverlay({ name, description, onSubmit, onDismiss }: { name
   );
 }
 
-function FocusOverlay({ onSend, streamingText, onSpeak, speakingMessageId }: { onSend: (id: string, text: string) => Promise<void>; streamingText: Map<string, string>; onSpeak?: (text: string) => void; speakingMessageId?: string | null }) {
+function FocusOverlay({ onSend, streamingText, onSpeak, speakingMessageId, titleColor }: { onSend: (id: string, text: string) => Promise<void>; streamingText: Map<string, string>; onSpeak?: (text: string) => void; speakingMessageId?: string | null; titleColor?: string }) {
   const { focusedSession, dismissFocus } = useFocus();
   if (!focusedSession || Platform.OS !== "web") return null;
   return (
@@ -472,6 +494,7 @@ function FocusOverlay({ onSend, streamingText, onSpeak, speakingMessageId }: { o
           streamingText={streamingText.get(focusedSession.id)}
           onSpeak={onSpeak}
           speakingMessageId={speakingMessageId}
+          titleColor={titleColor}
           style={{
             flex: 1,
             width: "100%",
@@ -817,6 +840,7 @@ export default function App() {
                     streamingText={aria.streamingText.get('quick')}
                     onSpeak={handleSpeak}
                     speakingMessageId={audioPlayer.speakingId}
+                    titleColor={tod.textColor}
                     style={{ flex: 1, width: "100%", maxWidth: "none", maxHeight: "none", borderRadius: 0 } as any}
                   />
                 </View>
@@ -836,6 +860,7 @@ export default function App() {
                     streamingText={aria.streamingText.get('quick')}
                     onSpeak={handleSpeak}
                     speakingMessageId={audioPlayer.speakingId}
+                    titleColor={tod.textColor}
                     style={{ flex: 1, maxWidth: 640, width: "100%" } as any}
                   />
                 </View>
@@ -853,7 +878,7 @@ export default function App() {
                   <View style={styles.heroInner}>
                     <Text style={[styles.heroGreeting, { color: tod.textColor }]}>What are you working on?</Text>
                     {!isMobile && (
-                      <View style={[{ width: "100%", backgroundColor: "#F5F3F0", borderRadius: 14 } as any, searchResults.length > 0 && { borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }]}>
+                      <View style={[{ width: "100%", backgroundColor: "#F5F3F0", borderRadius: 14, minHeight: 90 } as any, searchResults.length > 0 && { borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }]}>
                         {/* Input row */}
                         <View style={{ paddingHorizontal: 18, paddingTop: 6 } as any}>
                           <TextInput
@@ -923,6 +948,18 @@ export default function App() {
 
                 {/* Needs You strip — desktop only */}
                 {!isMobile && <NeedsYouStrip items={aria.needsYou} onNavigate={(id) => enterWorkView(id)} onExpand={enterNeedsYou} headerColor={tod.textColor} onSend={aria.sendMessage} streamingText={aria.streamingText} />}
+
+                {/* Projects — root-level objectives as grid tiles */}
+                {!isMobile && aria.tree && (
+                  <ProjectsStrip
+                    projects={(aria.tree.children ?? []).filter(c => c.status !== 'resolved' && c.id !== 'quick')}
+                    onNavigate={(id) => enterWorkView(id)}
+                    onCreateChild={(id) => setCreateParentId(id)}
+                    onEdit={(id) => setEditingId(id)}
+                    headerColor={tod.textColor}
+                    titleColor={tod.textColor}
+                  />
+                )}
 
                 {/* Recent Work strip — desktop only */}
                 {!isMobile && <RecentWorkStrip items={aria.recentWork} onNavigate={(id) => enterWorkView(id)} headerColor={tod.textColor} />}
@@ -1030,6 +1067,7 @@ export default function App() {
                   streamingText={aria.streamingText.get(mobileChatId)}
                   onSpeak={handleSpeak}
                   speakingMessageId={audioPlayer.speakingId}
+                  titleColor={tod.textColor}
                   style={{ flex: 1, width: "100%", maxWidth: "none", maxHeight: "none", borderRadius: 0 } as any}
                 />
               </View>
@@ -1083,8 +1121,10 @@ export default function App() {
                       streamingText={aria.streamingText.get(item.session.id)}
                       machine={obj?.machine}
                       onSetMachine={(m) => aria.setMachine(item.session.id, m)}
+                      onSetModel={(m) => aria.updateObjective(item.session.id, { model: m })}
                       onSpeak={handleSpeak}
                       speakingMessageId={audioPlayer.speakingId}
+                      titleColor={tod.textColor}
                     />
                     );
                   })}
@@ -1146,7 +1186,7 @@ export default function App() {
               >
                 {/* Objective section — title, description, actions */}
                 <View style={styles.objectiveSection}>
-                  <Text style={styles.objectiveTitle}>{effectiveCurrent?.name ?? ""}</Text>
+                  <Text style={[styles.objectiveTitle, { color: tod.textColor }]}>{effectiveCurrent?.name ?? ""}</Text>
                   <Text style={[styles.objectiveDescription, { maxWidth: 640 }]}>{effectiveCurrent?.description || "No description"}</Text>
                   <View style={styles.actionButtons}>
                     <GlassButton size={38} onPress={() => {
@@ -1184,8 +1224,10 @@ export default function App() {
                       streamingText={aria.streamingText.get(child.id)}
                       machine={child.machine}
                       onSetMachine={(m) => aria.setMachine(child.id, m)}
+                      onSetModel={(m) => aria.updateObjective(child.id, { model: m })}
                       onSpeak={handleSpeak}
                       speakingMessageId={audioPlayer.speakingId}
+                      titleColor={tod.textColor}
                     />
                   ))}
                 </View>
@@ -1194,12 +1236,13 @@ export default function App() {
 
           </View>
         )}
-        <FocusOverlay onSend={aria.sendMessage} streamingText={aria.streamingText} onSpeak={handleSpeak} speakingMessageId={audioPlayer.speakingId} />
+        <FocusOverlay onSend={aria.sendMessage} streamingText={aria.streamingText} onSpeak={handleSpeak} speakingMessageId={audioPlayer.speakingId} titleColor={tod.textColor} />
         {createParentId && (
           <CreateObjectiveOverlay
             parentId={createParentId}
-            onSubmit={async (parentId, name) => {
+            onSubmit={async (parentId, name, desc) => {
               const newId = await aria.createObjective(parentId, name);
+              if (newId && desc) await aria.updateObjective(newId, { description: desc });
               if (newId && parentId !== currentId) enterWorkView(newId);
             }}
             onDismiss={() => setCreateParentId(null)}
