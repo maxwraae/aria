@@ -5,7 +5,6 @@ import { homedir } from "os";
 import Database from "better-sqlite3";
 import {
   getObjective,
-  getAncestors,
   getUnprocessedMessages,
   getSenderRelation,
   updateStatus,
@@ -25,29 +24,19 @@ import childrenBrick from "../context/bricks/children/index.js";
 import similarBrick from "../context/bricks/similar/index.js";
 import memoryBrick from "../context/bricks/memory/index.js";
 import conversationBrick from "../context/bricks/conversation/index.js";
+import neverBrick from "../context/bricks/never/index.js";
 import focusBrick from "../context/bricks/focus/index.js";
 import { processOutput } from "./output.js";
 import { loadConfig } from "../context/config.js";
 
-const BRICKS = [personaBrick, contractBrick, environmentBrick, objectiveBrick, parentsBrick, siblingsBrick, childrenBrick, similarBrick, memoryBrick, conversationBrick, focusBrick];
+const BRICKS = [personaBrick, contractBrick, environmentBrick, objectiveBrick, parentsBrick, siblingsBrick, childrenBrick, similarBrick, memoryBrick, conversationBrick, neverBrick, focusBrick];
 
-function resolveModel(db: Database.Database, objectiveId: string): string {
-  const MAX_DEPTH = 3;
-  const RECENCY_SECONDS = 2 * 60 * 60; // 2 hours
-  const cutoff = Math.floor(Date.now() / 1000) - RECENCY_SECONDS;
+export function resolveModel(db: Database.Database, objectiveId: string): string {
+  const obj = getObjective(db, objectiveId);
+  if (obj?.model && obj.model !== "sonnet") return obj.model;
 
-  const checkMaxPresence = db.prepare(
-    "SELECT 1 FROM inbox WHERE objective_id = ? AND sender = 'max' AND created_at > ? LIMIT 1"
-  );
-
-  if (checkMaxPresence.get(objectiveId, cutoff)) return "opus";
-
-  const ancestors = getAncestors(db, objectiveId); // root-first
-  const closestFirst = [...ancestors].reverse();
-
-  for (let i = 0; i < Math.min(closestFirst.length, MAX_DEPTH); i++) {
-    if (checkMaxPresence.get(closestFirst[i].id, cutoff)) return "opus";
-  }
+  const unprocessed = getUnprocessedMessages(db, objectiveId);
+  if (unprocessed.some((m) => m.sender === "max")) return "opus";
 
   return "sonnet";
 }
@@ -90,9 +79,9 @@ export async function spawnTurn(
   // 4. Build user message from bundled inbox messages
   const userMessage = formatMessages(db, messages, objectiveId);
 
-  // 5. Resolve model: explicit override > dynamic (Max presence in ancestor chain)
+  // 5. Resolve model: explicit override > Max in unprocessed → opus > default sonnet
   const obj = getObjective(db, objectiveId);
-  const model = (obj?.model && obj.model !== "sonnet") ? obj.model : resolveModel(db, objectiveId);
+  const model = resolveModel(db, objectiveId);
   console.log(`[spawn] ${objectiveId.slice(0, 8)} model=${model} (resolved)`);
 
   // 6. Create turn record

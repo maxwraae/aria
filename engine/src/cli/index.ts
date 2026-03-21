@@ -20,6 +20,7 @@ import parentsBrick from '../context/bricks/parents/index.js';
 import siblingsBrick from '../context/bricks/siblings/index.js';
 import childrenBrick from '../context/bricks/children/index.js';
 import conversationBrick from '../context/bricks/conversation/index.js';
+import neverBrick from '../context/bricks/never/index.js';
 import { launchTUI } from '../context/tui/index.js';
 import { loadConfig } from '../context/config.js';
 import { MODELS } from '../context/models.js';
@@ -695,7 +696,7 @@ function cmdContext(rawArgs: string[]): void {
     }
 
     const config = loadConfig();
-    const bricks = [personaBrick, ariaBrick, environmentBrick, objectiveBrick, parentsBrick, siblingsBrick, childrenBrick, similarBrick, conversationBrick, focusBrick];
+    const bricks = [personaBrick, ariaBrick, environmentBrick, objectiveBrick, parentsBrick, siblingsBrick, childrenBrick, similarBrick, conversationBrick, neverBrick, focusBrick];
     const result = assembleContext(bricks, { db, objectiveId, config: config as unknown as Record<string, unknown> });
     const content = result.content;
 
