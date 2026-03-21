@@ -12,6 +12,10 @@ import { MODELS } from '../models.js';
 
 const BUDGET = MODELS.sonnet.contextWindow;
 
+function scrollStep(): number {
+  return Math.max(3, Math.floor((process.stdout.rows ?? 24) / 2));
+}
+
 type View =
   | { type: 'overview'; selectedIndex: number }
   | { type: 'detail'; brickIndex: number; scrollOffset: number }
@@ -229,10 +233,10 @@ export async function launchTUI(
             // Arrow keys
             if (bytes[2] === 0x41) {
               // Up — scroll
-              state = { ...state, scrollOffset: Math.max(0, state.scrollOffset - 1) };
+              state = { ...state, scrollOffset: Math.max(0, state.scrollOffset - scrollStep()) };
             } else if (bytes[2] === 0x42) {
               // Down — scroll
-              state = { ...state, scrollOffset: state.scrollOffset + 1 };
+              state = { ...state, scrollOffset: state.scrollOffset + scrollStep() };
             } else if (bytes[2] === 0x48) {
               // Home
               state = { ...state, scrollOffset: 0 };
@@ -242,10 +246,10 @@ export async function launchTUI(
             }
           } else if (bytes[0] === 0x6b) {
             // k — scroll up
-            state = { ...state, scrollOffset: Math.max(0, state.scrollOffset - 1) };
+            state = { ...state, scrollOffset: Math.max(0, state.scrollOffset - scrollStep()) };
           } else if (bytes[0] === 0x6a) {
             // j — scroll down
-            state = { ...state, scrollOffset: state.scrollOffset + 1 };
+            state = { ...state, scrollOffset: state.scrollOffset + scrollStep() };
           } else if (bytes[0] === 0x09) {
             // Tab — cycle config fields
             if (configFields.length > 0) {
@@ -287,18 +291,18 @@ export async function launchTUI(
             state = { type: 'overview', selectedIndex: 0 };
           } else if (bytes[0] === 0x1b && bytes[1] === 0x5b) {
             if (bytes[2] === 0x41) {
-              state = { ...state, scrollOffset: Math.max(0, state.scrollOffset - 1) };
+              state = { ...state, scrollOffset: Math.max(0, state.scrollOffset - scrollStep()) };
             } else if (bytes[2] === 0x42) {
-              state = { ...state, scrollOffset: state.scrollOffset + 1 };
+              state = { ...state, scrollOffset: state.scrollOffset + scrollStep() };
             } else if (bytes[2] === 0x48) {
               state = { ...state, scrollOffset: 0 };
             } else if (bytes[2] === 0x46) {
               state = { ...state, scrollOffset: 99999 };
             }
           } else if (bytes[0] === 0x6b) {
-            state = { ...state, scrollOffset: Math.max(0, state.scrollOffset - 1) };
+            state = { ...state, scrollOffset: Math.max(0, state.scrollOffset - scrollStep()) };
           } else if (bytes[0] === 0x6a) {
-            state = { ...state, scrollOffset: state.scrollOffset + 1 };
+            state = { ...state, scrollOffset: state.scrollOffset + scrollStep() };
           } else if (bytes[0] === 0x1b && bytes[1] !== 0x5b) {
             state = { type: 'overview', selectedIndex: 0 };
           }
