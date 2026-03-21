@@ -33,9 +33,6 @@ const environmentBrick: Brick = {
       hostname.toLowerCase().includes("mini") ||
       hostname.toLowerCase().includes("mac-mini");
     const machineName = isMini ? "Mac Mini" : "MacBook Pro";
-    const machineSpec = isMini
-      ? "**Mac Mini M1** (8GB, 256GB) · Running autonomously. Max may not be at his computer."
-      : "**MacBook Pro M4 Pro** (24GB, 1TB) · Max is likely nearby.";
 
     // Model and CWD from objective
     let model = "sonnet";
@@ -55,20 +52,18 @@ const environmentBrick: Brick = {
 
 ## You are on the ${machineName}
 
-${machineSpec}
 Model: ${model}
 CWD: ${cwd}
 Objective ID: ${objectiveId} (env: ARIA_OBJECTIVE_ID)
 
 ## ${dateStr} · ${timeStr}`;
 
-    // Read static template
-    const staticBody = readFileSync(
-      join(__dirname, "environment.md"),
-      "utf-8"
-    );
+    // Read machine-specific and shared content
+    const machineFile = isMini ? "environment-mini.md" : "environment-macbook.md";
+    const machineBody = readFileSync(join(__dirname, machineFile), "utf-8");
+    const sharedBody = readFileSync(join(__dirname, "environment.md"), "utf-8");
 
-    const content = header + "\n\n" + staticBody;
+    const content = header + "\n\n" + machineBody + "\n\n" + sharedBody;
 
     return {
       name: "ENVIRONMENT",

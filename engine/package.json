@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/cli/index.ts",
-    "build": "tsc && cp src/context/bricks/persona/persona.md dist/context/bricks/persona/ && cp src/context/bricks/contract/contract.md dist/context/bricks/contract/ && cp src/context/bricks/environment/environment.md dist/context/bricks/environment/",
+    "build": "tsc && cp src/context/bricks/persona/persona.md dist/context/bricks/persona/ && cp src/context/bricks/contract/contract.md dist/context/bricks/contract/ && cp src/context/bricks/environment/environment.md src/context/bricks/environment/environment-macbook.md src/context/bricks/environment/environment-mini.md dist/context/bricks/environment/",
     "start": "node dist/cli/index.js",
     "test": "vitest run"
   },

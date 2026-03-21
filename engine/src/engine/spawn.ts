@@ -1,5 +1,7 @@
 import { spawn } from "child_process";
 import fs from "fs";
+import { join } from "path";
+import { homedir } from "os";
 import Database from "better-sqlite3";
 import {
   getObjective,
@@ -23,10 +25,11 @@ import childrenBrick from "../context/bricks/children/index.js";
 import similarBrick from "../context/bricks/similar/index.js";
 import memoryBrick from "../context/bricks/memory/index.js";
 import conversationBrick from "../context/bricks/conversation/index.js";
+import focusBrick from "../context/bricks/focus/index.js";
 import { processOutput } from "./output.js";
 import { loadConfig } from "../context/config.js";
 
-const BRICKS = [personaBrick, contractBrick, environmentBrick, objectiveBrick, parentsBrick, siblingsBrick, childrenBrick, similarBrick, memoryBrick, conversationBrick];
+const BRICKS = [personaBrick, contractBrick, environmentBrick, objectiveBrick, parentsBrick, siblingsBrick, childrenBrick, similarBrick, memoryBrick, conversationBrick, focusBrick];
 
 function resolveModel(db: Database.Database, objectiveId: string): string {
   const MAX_DEPTH = 3;
@@ -99,7 +102,7 @@ export async function spawnTurn(
   stampMessages(db, objectiveId, turn.id);
 
   // 8. Spawn claude -p
-  const claudePath = process.env.CLAUDE_PATH ?? "claude";
+  const claudePath = process.env.CLAUDE_PATH ?? join(homedir(), '.local', 'bin', 'claude');
   const proc = spawn(
     claudePath,
     [

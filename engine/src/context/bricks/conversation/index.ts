@@ -69,6 +69,9 @@ function getConversationContext(
     includedLines.push(line);
   }
 
+  // Reverse to chronological order (oldest first) after backward-fill
+  includedLines.reverse();
+
   return [header, ...includedLines].join("\n");
 }
 
