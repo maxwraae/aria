@@ -33,17 +33,15 @@ function getConversationContext(
   perMessageMax: number,
   maxTokens: number
 ): string {
-  // Fetch more messages than we'll need so we can pack until the cap
+  // Fetch messages oldest-first from DB
   const messages = getConversation(db, objectiveId, 200);
 
   if (messages.length === 0) {
     return `# RECENT CONVERSATION\n\n(no messages yet)`;
   }
 
-  const header = `# RECENT CONVERSATION\n`;
-  let usedTokens = countTokens(header);
-  const includedLines: string[] = [];
-
+  // Format all messages first
+  const allLines: string[] = [];
   for (const msg of messages) {
     const sender = formatSender(db, msg, objectiveId);
     let body = msg.message;
@@ -52,24 +50,29 @@ function getConversationContext(
     if (perMessageMax > 0) {
       const msgTokens = countTokens(body);
       if (msgTokens > perMessageMax) {
-        // Rough character truncation: assume ~4 chars per token
         const charLimit = perMessageMax * 4;
         body = body.slice(0, charLimit) + "…";
       }
     }
 
-    const line = `[${sender}] ${body}`;
-    const lineTokens = countTokens(line);
+    allLines.push(`[${sender}] ${body}`);
+  }
 
+  // Backward fill: pack from newest to oldest until budget hit
+  const header = `# RECENT CONVERSATION\n`;
+  let usedTokens = countTokens(header);
+  const includedLines: string[] = [];
+
+  for (let i = allLines.length - 1; i >= 0; i--) {
+    const lineTokens = countTokens(allLines[i]);
     if (usedTokens + lineTokens > maxTokens) {
       break;
     }
-
     usedTokens += lineTokens;
-    includedLines.push(line);
+    includedLines.push(allLines[i]);
   }
 
-  // Reverse to chronological order (oldest first) after backward-fill
+  // Reverse back to chronological order (oldest first)
   includedLines.reverse();
 
   return [header, ...includedLines].join("\n");
