@@ -21,6 +21,7 @@ export interface Objective {
   model: string;
   cwd: string | null;
   machine: string | null;
+  depth: number;
   fail_count: number;
   created_at: number;
   updated_at: number;
@@ -34,6 +35,7 @@ export interface InboxMessage {
   sender: string;
   type: string;
   turn_id: string | null;
+  cascade_id: string | null;
   created_at: number;
 }
 
@@ -83,12 +85,19 @@ export function createObjective(
   const cwd = opts.cwd ?? null;
   const machine = opts.machine ?? null;
 
+  // Compute depth from parent
+  let depth = 0;
+  if (parent) {
+    const parentObj = getObjective(db, parent);
+    depth = parentObj ? (parentObj.depth ?? 0) + 1 : 0;
+  }
+
   stmt(
     db,
-    "insertObjective",
-    `INSERT INTO objectives (id, objective, description, parent, status, model, cwd, machine, fail_count, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'idle', ?, ?, ?, 0, ?, ?)`
-  ).run(id, opts.objective, description, parent, model, cwd, machine, ts, ts);
+    "insertObjectiveWithDepth",
+    `INSERT INTO objectives (id, objective, description, parent, status, model, cwd, machine, depth, fail_count, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'idle', ?, ?, ?, ?, 0, ?, ?)`
+  ).run(id, opts.objective, description, parent, model, cwd, machine, depth, ts, ts);
 
   stmt(
     db,
@@ -245,6 +254,15 @@ export function cascadeAbandon(db: Database.Database, parentId: string): void {
   abandon();
 }
 
+export function resetFailCount(db: Database.Database, id: string): void {
+  const ts = now();
+  stmt(
+    db,
+    "resetFail",
+    "UPDATE objectives SET fail_count = 0, updated_at = ? WHERE id = ?"
+  ).run(ts, id);
+}
+
 export function incrementFailCount(db: Database.Database, id: string): number {
   const ts = now();
   stmt(
@@ -297,18 +315,20 @@ export function insertMessage(
     message: string;
     sender: string;
     type?: string;
+    cascade_id?: string;
   }
 ): InboxMessage {
   const id = generateId();
   const ts = now();
   const type = opts.type ?? "message";
+  const cascadeId = opts.cascade_id ?? null;
 
   stmt(
     db,
-    "insertMessage",
-    `INSERT INTO inbox (id, objective_id, message, sender, type, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, opts.objective_id, opts.message, opts.sender, type, ts);
+    "insertMessageWithCascade",
+    `INSERT INTO inbox (id, objective_id, message, sender, type, cascade_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, opts.objective_id, opts.message, opts.sender, type, cascadeId, ts);
 
   // Touch the objective's updated_at
   stmt(db, "touchObjective", "UPDATE objectives SET updated_at = ? WHERE id = ?").run(
@@ -361,7 +381,7 @@ export function getPendingObjectives(db: Database.Database): Objective[] {
     `SELECT DISTINCT o.* FROM objectives o
      JOIN inbox i ON i.objective_id = o.id
      WHERE i.turn_id IS NULL
-       AND o.status IN ('idle', 'needs-input')
+       AND o.status = 'idle'
      ORDER BY o.urgent DESC, o.important DESC, o.created_at ASC`
   ).all() as Objective[];
 }
@@ -416,12 +436,12 @@ export function updateTurnSession(
 
 // ── Engine helpers ─────────────────────────────────────────────────
 
-export function getThinkingCount(db: Database.Database): number {
+export function getThinkingCount(db: Database.Database, machineId: string): number {
   const row = stmt(
     db,
     "thinkingCount",
-    "SELECT COUNT(*) as count FROM objectives WHERE status = 'thinking'"
-  ).get() as { count: number };
+    "SELECT COUNT(*) as count FROM objectives WHERE status = 'thinking' AND (machine = ? OR (machine IS NULL AND ? = 'mini'))"
+  ).get(machineId, machineId) as { count: number };
   return row.count;
 }
 
@@ -552,6 +572,116 @@ export function matchObjectiveByText(
      ORDER BY fts.rank
      LIMIT 5`
   ).all(ftsQuery) as MatchedObjective[];
+}
+
+export function hasUnprocessedMaxMessage(db: Database.Database, objectiveId: string): boolean {
+  const row = stmt(
+    db,
+    "hasUnprocessedMaxMsg",
+    `SELECT 1 FROM inbox
+     WHERE objective_id = ? AND turn_id IS NULL AND sender = 'max'
+     LIMIT 1`
+  ).get(objectiveId) as { 1: number } | undefined;
+  return !!row;
+}
+
+// ── Cascade tracking ──────────────────────────────────────────────
+
+/**
+ * Resolve which cascade_id to propagate for a turn on this objective.
+ * Priority: Max message's cascade_id > most recent message's cascade_id.
+ * Returns null if no unprocessed messages or none have cascade_ids.
+ */
+export function resolveCascadeId(db: Database.Database, objectiveId: string): string | null {
+  // First, try to find a Max message with a cascade_id
+  const maxMsg = stmt(
+    db,
+    "resolveMaxCascade",
+    `SELECT cascade_id FROM inbox
+     WHERE objective_id = ? AND turn_id IS NULL AND sender = 'max' AND cascade_id IS NOT NULL
+     ORDER BY created_at DESC, rowid DESC LIMIT 1`
+  ).get(objectiveId) as { cascade_id: string } | undefined;
+
+  if (maxMsg) return maxMsg.cascade_id;
+
+  // Otherwise, use the most recent message's cascade_id
+  const anyMsg = stmt(
+    db,
+    "resolveAnyCascade",
+    `SELECT cascade_id FROM inbox
+     WHERE objective_id = ? AND turn_id IS NULL AND cascade_id IS NOT NULL
+     ORDER BY created_at DESC, rowid DESC LIMIT 1`
+  ).get(objectiveId) as { cascade_id: string } | undefined;
+
+  return anyMsg?.cascade_id ?? null;
+}
+
+// ── Depth cap ─────────────────────────────────────────────────────
+
+export const MAX_AUTONOMOUS_DEPTH = 5;
+
+// ── Fan-out cap ────────────────────────────────────────────────────
+
+export const MAX_CHILDREN = 10;
+
+export function getActiveChildCount(db: Database.Database, parentId: string): number {
+  const row = stmt(
+    db,
+    "activeChildCount",
+    "SELECT COUNT(*) as count FROM objectives WHERE parent = ? AND status NOT IN ('resolved', 'failed', 'abandoned')"
+  ).get(parentId) as { count: number };
+  return row.count;
+}
+export const INITIATION_WINDOW = 3600; // 1 hour in seconds
+
+/**
+ * Walk up from startId to root, find the shallowest ancestor where
+ * Max sent a message within the last hour. Returns that ancestor's depth.
+ * If no ancestor has a recent Max message, returns 0 (root).
+ */
+export function getInitiationDepth(db: Database.Database, startId: string): number {
+  const cutoff = now() - INITIATION_WINDOW;
+  let initiationDepth = 0;
+  let current = getObjective(db, startId);
+
+  while (current) {
+    const hasMaxMsg = stmt(
+      db,
+      "hasRecentMaxMsg",
+      `SELECT 1 FROM inbox WHERE objective_id = ? AND sender = 'max' AND created_at >= ? LIMIT 1`
+    ).get(current.id, cutoff);
+
+    if (hasMaxMsg) {
+      initiationDepth = current.depth ?? 0;
+    }
+
+    if (!current.parent) break;
+    current = getObjective(db, current.parent);
+  }
+
+  return initiationDepth;
+}
+
+/**
+ * Check whether a new child under parentId would exceed the autonomous depth cap.
+ * Returns allowed=true if creation is permitted.
+ */
+export function checkDepthCap(
+  db: Database.Database,
+  parentId: string
+): { allowed: boolean; autonomousDepth: number; newChildDepth: number } {
+  const parent = getObjective(db, parentId);
+  if (!parent) return { allowed: false, autonomousDepth: 0, newChildDepth: 0 };
+
+  const newChildDepth = (parent.depth ?? 0) + 1;
+  const initiationDepth = getInitiationDepth(db, parentId);
+  const autonomousDepth = newChildDepth - initiationDepth;
+
+  return {
+    allowed: autonomousDepth < MAX_AUTONOMOUS_DEPTH,
+    autonomousDepth,
+    newChildDepth,
+  };
 }
 
 export function getStuckObjectives(
@@ -723,8 +853,8 @@ export function syncFromPeer(db: Database.Database): void {
 
     // Copy new objectives from peer that we don't have locally
     db.exec(`
-      INSERT OR IGNORE INTO objectives (id, objective, description, parent, status, waiting_on, resolution_summary, important, urgent, model, cwd, machine, fail_count, created_at, updated_at)
-      SELECT id, objective, description, parent, status, waiting_on, resolution_summary, important, urgent, model, cwd, machine, fail_count, created_at, updated_at
+      INSERT OR IGNORE INTO objectives (id, objective, description, parent, status, waiting_on, resolution_summary, important, urgent, model, cwd, machine, depth, fail_count, created_at, updated_at)
+      SELECT id, objective, description, parent, status, waiting_on, resolution_summary, important, urgent, model, cwd, machine, depth, fail_count, created_at, updated_at
       FROM peer.objectives
     `);
 
@@ -745,8 +875,8 @@ export function syncFromPeer(db: Database.Database): void {
 
     // Copy new inbox messages from peer that we don't have locally
     db.exec(`
-      INSERT OR IGNORE INTO inbox (id, objective_id, sender, type, message, turn_id, processed_by, created_at)
-      SELECT id, objective_id, sender, type, message, turn_id, processed_by, created_at
+      INSERT OR IGNORE INTO inbox (id, objective_id, sender, type, message, turn_id, processed_by, cascade_id, created_at)
+      SELECT id, objective_id, sender, type, message, turn_id, processed_by, cascade_id, created_at
       FROM peer.inbox
     `);
 

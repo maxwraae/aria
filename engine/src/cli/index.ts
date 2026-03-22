@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { initDb } from '../db/schema.js';
-import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation, createSchedule, listSchedules, getTreeUnified, getObjectiveUnified, getConversationUnified, getChildrenUnified, PROTECTED_IDS } from '../db/queries.js';
+import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation, createSchedule, listSchedules, getTreeUnified, getObjectiveUnified, getConversationUnified, getChildrenUnified, PROTECTED_IDS, checkDepthCap, MAX_AUTONOMOUS_DEPTH, getActiveChildCount, MAX_CHILDREN } from '../db/queries.js';
+import { generateId } from '../db/utils.js';
 import { startEngine } from '../engine/loop.js';
 import { startServer } from '../server/index.js';
 import { isDeepWork } from '../engine/concurrency.js';
@@ -249,6 +250,23 @@ function cmdCreate(rawArgs: string[]): void {
     process.exit(1);
   }
 
+  // Depth cap: only enforced when called by an agent (ARIA_OBJECTIVE_ID is set)
+  if (process.env.ARIA_OBJECTIVE_ID) {
+    const { allowed, autonomousDepth } = checkDepthCap(db, parentId);
+    if (!allowed) {
+      console.error(`Maximum autonomous depth reached (${autonomousDepth} >= ${MAX_AUTONOMOUS_DEPTH}). Report to your parent instead of decomposing further.`);
+      db.close();
+      process.exit(1);
+    }
+
+    const childCount = getActiveChildCount(db, parentId);
+    if (childCount >= MAX_CHILDREN) {
+      console.error(`Maximum children reached (${childCount} >= ${MAX_CHILDREN}). Resolve, fail, or rethink existing children before creating more.`);
+      db.close();
+      process.exit(1);
+    }
+  }
+
   const newObj = createObjective(db, {
     objective: objectiveText,
     parent: parentId,
@@ -256,11 +274,13 @@ function cmdCreate(rawArgs: string[]): void {
   });
 
   if (instructions) {
+    const cascadeId = process.env.ARIA_CASCADE_ID || undefined;
     insertMessage(db, {
       objective_id: newObj.id,
       message: instructions,
       sender: process.env.ARIA_OBJECTIVE_ID ?? 'system',
       type: 'message',
+      cascade_id: cascadeId,
     });
   }
 
@@ -304,6 +324,7 @@ function cmdSend(rawArgs: string[]): void {
     objective_id: id,
     message,
     sender: 'max',
+    cascade_id: generateId(),
   });
 
   if (isTTY) {
@@ -397,11 +418,13 @@ function cmdSucceed(rawArgs: string[]): void {
   setResolutionSummary(db, targetId!, summary!);
   cascadeAbandon(db, targetId!);
 
+  const cascadeId = process.env.ARIA_CASCADE_ID || undefined;
   insertMessage(db, {
     objective_id: targetId!,
     message: summary!,
     sender: 'system',
     type: 'reply',
+    cascade_id: cascadeId,
   });
 
   // Notify parent
@@ -411,6 +434,7 @@ function cmdSucceed(rawArgs: string[]): void {
     message: resultMsg,
     sender: targetId!,
     type: 'reply',
+    cascade_id: cascadeId,
   });
 
   if (isTTY) {
@@ -454,11 +478,13 @@ function cmdFail(rawArgs: string[]): void {
   updateStatus(db, targetId!, 'failed');
 
   if (obj.parent) {
+    const cascadeId = process.env.ARIA_CASCADE_ID || undefined;
     insertMessage(db, {
       objective_id: obj.parent,
       message: `[failed] ${obj.objective}: ${reason}`,
       sender: targetId!,
       type: 'reply',
+      cascade_id: cascadeId,
     });
   }
 
@@ -493,11 +519,13 @@ function cmdReject(rawArgs: string[]): void {
   updateStatus(db, targetId!, 'idle');
   clearWaitingOn(db, targetId!);
 
+  const cascadeId = process.env.ARIA_CASCADE_ID || undefined;
   insertMessage(db, {
     objective_id: targetId!,
     message: feedback!,
     sender: callerId ?? 'max',
     type: 'message',
+    cascade_id: cascadeId,
   });
 
   if (isTTY) {
@@ -565,10 +593,12 @@ function cmdTell(rawArgs: string[]): void {
   const senderId = process.env.ARIA_OBJECTIVE_ID ?? 'max';
   const obj = getObjective(db, targetId!)!;
 
+  const cascadeId = process.env.ARIA_CASCADE_ID || undefined;
   const msg = insertMessage(db, {
     objective_id: targetId!,
     message: message!,
     sender: senderId,
+    cascade_id: cascadeId,
   });
 
   if (isTTY) {
@@ -599,11 +629,13 @@ function cmdNotify(rawArgs: string[]): void {
 
   const db = initDb();
 
+  const cascadeId = process.env.ARIA_CASCADE_ID || undefined;
   insertMessage(db, {
     objective_id: 'root',
     message: '[notify] ' + message,
     sender: process.env.ARIA_OBJECTIVE_ID ?? 'system',
     type: 'signal',
+    cascade_id: cascadeId,
   });
 
   // Always print to stdout (this is a notification)
@@ -1026,9 +1058,9 @@ switch (command) {
   case 'up':
   case 'engine': {
     const engineDb = initDb();
-    const { nudge } = startEngine(engineDb);
+    startEngine(engineDb);
     const surfaceDist = decodeURIComponent(new URL('../../../surface/dist', import.meta.url).pathname);
-    const server = startServer(engineDb, nudge, surfaceDist);
+    const server = startServer(engineDb, surfaceDist);
     process.on('SIGINT', () => {
       console.log('\n[engine] Shutting down...');
       server.close();

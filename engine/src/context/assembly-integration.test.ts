@@ -74,6 +74,7 @@ function createTestDb(): Database.Database {
       type TEXT DEFAULT 'message',
       turn_id TEXT,
       processed_by TEXT,
+      cascade_id TEXT,
       created_at INTEGER NOT NULL,
       FOREIGN KEY (objective_id) REFERENCES objectives(id)
     );

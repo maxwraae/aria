@@ -457,6 +457,122 @@ function EditObjectiveOverlay({ name, description, onSubmit, onDismiss }: { name
   );
 }
 
+function ResolveObjectiveOverlay({ onSucceed, onDismiss }: { onSucceed: (text: string) => void; onDismiss: () => void }) {
+  const [value, setValue] = useState("");
+  const inputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => clearTimeout(t);
+  }, []);
+
+  return (
+    <>
+      <Pressable
+        onPress={onDismiss}
+        style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(10,10,20,0.12)",
+          backdropFilter: "blur(6px)",
+          WebkitBackdropFilter: "blur(6px)",
+          zIndex: 300,
+          cursor: "default",
+        } as any}
+      />
+      <View
+        style={{
+          position: "fixed",
+          top: "50%", left: "50%",
+          transform: "translate(-50%, -50%)",
+          zIndex: 301,
+          width: "min(440px, 85vw)",
+          animation: "focusIn 200ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards",
+        } as any}
+      >
+        <View style={{
+          backgroundColor: "rgba(255,255,255,0.92)",
+          backdropFilter: "blur(20px) saturate(180%)",
+          WebkitBackdropFilter: "blur(20px) saturate(180%)",
+          borderRadius: 16,
+          borderWidth: 1.5,
+          borderColor: "rgba(255,255,255,0.4)",
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: 8 },
+          shadowOpacity: 0.15,
+          shadowRadius: 32,
+          overflow: "hidden",
+        } as any}>
+          <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 6 }}>
+            <Text style={{
+              fontSize: 13,
+              fontWeight: "500" as const,
+              color: "rgba(0,0,0,0.35)",
+              fontFamily: theme.fonts.sans,
+            }}>Resolve objective</Text>
+          </View>
+          <View style={{ paddingHorizontal: 20, paddingBottom: 4 }}>
+            <TextInput
+              ref={inputRef}
+              value={value}
+              onChangeText={setValue}
+              placeholder="Resolution summary…"
+              placeholderTextColor="rgba(0,0,0,0.22)"
+              multiline
+              numberOfLines={3}
+              onKeyPress={(e: any) => {
+                if (Platform.OS === "web" && e.nativeEvent.key === "Escape") {
+                  onDismiss();
+                }
+              }}
+              style={{
+                fontSize: 15,
+                fontWeight: "400" as const,
+                color: "#000000",
+                fontFamily: theme.fonts.sans,
+                paddingVertical: 8,
+                minHeight: 64,
+                ...(Platform.OS === "web" ? { outlineStyle: "none", resize: "none" } : {}),
+              } as any}
+            />
+          </View>
+          <View style={{
+            flexDirection: "row",
+            justifyContent: "flex-end",
+            paddingHorizontal: 20,
+            paddingBottom: 16,
+            paddingTop: 8,
+            gap: 8,
+          }}>
+            <Pressable
+              onPress={onDismiss}
+              style={({ pressed }) => ({
+                paddingHorizontal: 16,
+                paddingVertical: 8,
+                borderRadius: 8,
+                opacity: pressed ? 0.5 : 1,
+              })}
+            >
+              <Text style={{ fontSize: 14, fontWeight: "500" as const, color: "rgba(0,0,0,0.35)", fontFamily: theme.fonts.sans }}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => { onSucceed(value.trim()); onDismiss(); }}
+              style={({ pressed }) => ({
+                paddingHorizontal: 16,
+                paddingVertical: 8,
+                borderRadius: 8,
+                backgroundColor: "rgba(40,120,60,0.10)",
+                opacity: pressed ? 0.5 : 1,
+              })}
+            >
+              <Text style={{ fontSize: 14, fontWeight: "600" as const, color: "rgba(30,100,50,0.85)", fontFamily: theme.fonts.sans }}>Resolve</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </>
+  );
+}
+
 function FocusOverlay({ onSend, streamingText, onSpeak, speakingMessageId, titleColor }: { onSend: (id: string, text: string) => Promise<void>; streamingText: Map<string, string>; onSpeak?: (text: string) => void; speakingMessageId?: string | null; titleColor?: string }) {
   const { focusedSession, dismissFocus } = useFocus();
   if (!focusedSession || Platform.OS !== "web") return null;
@@ -629,6 +745,7 @@ export default function App() {
   const [mobileChatId, setMobileChatId] = useState<string | null>(null);
   const [createParentId, setCreateParentId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
 
   const enterWorkView = useCallback((id: string) => {
     if (isMobile) {
@@ -1114,7 +1231,7 @@ export default function App() {
                       key={item.session.id}
                       session={item.session}
                       focused={i === 0}
-                      onResolve={() => {}}
+                      onResolve={() => setResolvingId(item.session.id)}
                       urgent={item.urgent}
                       important={item.important}
                       onSend={(text) => aria.sendMessage(item.session.id, text)}
@@ -1125,6 +1242,12 @@ export default function App() {
                       onSpeak={handleSpeak}
                       speakingMessageId={audioPlayer.speakingId}
                       titleColor={tod.textColor}
+                      onUpload={async (file) => {
+                        const filename = await aria.uploadFile(file);
+                        if (filename) {
+                          await aria.sendMessage(item.session.id, `[attachment:${filename}]`);
+                        }
+                      }}
                     />
                     );
                   })}
@@ -1190,7 +1313,7 @@ export default function App() {
                   <Text style={[styles.objectiveDescription, { maxWidth: 640 }]}>{effectiveCurrent?.description || "No description"}</Text>
                   <View style={styles.actionButtons}>
                     <GlassButton size={38} onPress={() => {
-                      if (currentId) console.log("resolve", currentId);
+                      if (currentId) setResolvingId(currentId);
                     }}>
                       <Text style={styles.actionButtonIcon}>{"\u2713"}</Text>
                     </GlassButton>
@@ -1219,6 +1342,7 @@ export default function App() {
                       resolvedCount={child.children?.filter(c => c.status === "resolved").length ?? 0}
                       urgent={child.urgent}
                       important={child.important}
+                      onResolve={() => setResolvingId(child.id)}
                       onAddChild={() => setCreateParentId(child.id)}
                       onSend={(text) => aria.sendMessage(child.id, text)}
                       streamingText={aria.streamingText.get(child.id)}
@@ -1228,6 +1352,12 @@ export default function App() {
                       onSpeak={handleSpeak}
                       speakingMessageId={audioPlayer.speakingId}
                       titleColor={tod.textColor}
+                      onUpload={async (file) => {
+                        const filename = await aria.uploadFile(file);
+                        if (filename) {
+                          await aria.sendMessage(child.id, `[attachment:${filename}]`);
+                        }
+                      }}
                     />
                   ))}
                 </View>
@@ -1268,6 +1398,12 @@ export default function App() {
             />
           );
         })()}
+        {resolvingId && (
+          <ResolveObjectiveOverlay
+            onSucceed={(summary) => aria.succeedObjective(resolvingId, summary)}
+            onDismiss={() => setResolvingId(null)}
+          />
+        )}
       </>
     </FocusProvider>
   );

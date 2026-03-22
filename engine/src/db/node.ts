@@ -3,8 +3,9 @@ import path from 'path';
 
 const KNOWN_MACHINES: Record<string, string> = {
   'Maxs-Mac-mini': 'mini',
+  'Macmini': 'mini',
   'Maxs-MacBook-Pro': 'macbook',
-  'Mac': 'mini',
+  'Mac': 'macbook',
 };
 
 export function getMachineId(): string {

@@ -40,6 +40,10 @@ export interface UseARIAReturn {
   sendTTSRequest: (text: string) => string;
   cancelTTS: (requestId: string) => void;
   onTTSMessage: (cb: (msg: TTSMessage) => void) => void;
+  succeedObjective: (id: string, summary: string) => Promise<void>;
+  failObjective: (id: string, reason: string) => Promise<void>;
+  rejectObjective: (id: string, feedback: string) => Promise<void>;
+  uploadFile: (file: File) => Promise<string | null>;
   streamingText: Map<string, string>;
   connected: boolean;
 }
@@ -269,6 +273,72 @@ export function useARIA(): UseARIAReturn {
     }
   }, [refreshTree]);
 
+  const succeedObjective = useCallback(async (id: string, summary: string) => {
+    try {
+      await fetch(`/api/objectives/${id}/succeed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ summary }),
+      });
+      await refreshTree();
+    } catch (err) {
+      console.error('[useARIA] succeedObjective error:', err);
+    }
+  }, [refreshTree]);
+
+  const failObjective = useCallback(async (id: string, reason: string) => {
+    try {
+      await fetch(`/api/objectives/${id}/fail`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      });
+      await refreshTree();
+    } catch (err) {
+      console.error('[useARIA] failObjective error:', err);
+    }
+  }, [refreshTree]);
+
+  const rejectObjective = useCallback(async (id: string, feedback: string) => {
+    try {
+      await fetch(`/api/objectives/${id}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feedback }),
+      });
+      await refreshTree();
+    } catch (err) {
+      console.error('[useARIA] rejectObjective error:', err);
+    }
+  }, [refreshTree]);
+
+  const uploadFile = useCallback(async (file: File): Promise<string | null> => {
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          // Strip the data:...;base64, prefix
+          const base64Data = result.split(',')[1];
+          resolve(base64Data);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name, data: base64 }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.filename as string;
+    } catch (err) {
+      console.error('[useARIA] uploadFile error:', err);
+      return null;
+    }
+  }, []);
+
   return {
     tree,
     objectives,
@@ -280,6 +350,10 @@ export function useARIA(): UseARIAReturn {
     createObjective: createObj,
     updateObjective: updateObj,
     setMachine,
+    succeedObjective,
+    failObjective,
+    rejectObjective,
+    uploadFile,
     watchObjective,
     sendTTSRequest,
     cancelTTS,

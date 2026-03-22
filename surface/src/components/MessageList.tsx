@@ -1,5 +1,5 @@
 import { useRef, useEffect, type ReactNode } from "react";
-import { ScrollView, Animated, StyleSheet, Platform } from "react-native";
+import { ScrollView, Animated, StyleSheet, Platform, View, Text, Image, Pressable } from "react-native";
 import type { ChatMessage } from "../types/chat";
 import { UserMessage } from "./UserMessage";
 import { AgentMessage } from "./AgentMessage";
@@ -58,6 +58,39 @@ export function MessageList({ messages, scrollEnabled = true, bottomPad = 120, o
         );
       case "tool_call":
         return <Figure tool={item} />;
+      case "image":
+        return (
+          <Pressable onPress={() => { if (Platform.OS === 'web') (window as any).open(item.uri, '_blank'); }}>
+            <Image
+              source={{ uri: item.uri }}
+              style={{
+                width: '100%',
+                maxWidth: 400,
+                height: 300,
+                borderRadius: 12,
+                resizeMode: 'contain',
+                backgroundColor: 'rgba(0,0,0,0.03)',
+              } as any}
+            />
+          </Pressable>
+        );
+      case "file":
+        return (
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: 'rgba(255,255,255,0.7)',
+            borderRadius: 10,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            alignSelf: 'flex-start',
+            borderWidth: 1,
+            borderColor: 'rgba(0,0,0,0.08)',
+          }}>
+            <Text style={{ fontSize: 13, color: 'rgba(0,0,0,0.5)', marginRight: 6 }}>📄</Text>
+            <Text style={{ fontSize: 13, color: 'rgba(0,0,0,0.6)', fontWeight: '500' }}>{item.name}</Text>
+          </View>
+        );
     }
   }
   const scrollRef = useRef<ScrollView>(null);

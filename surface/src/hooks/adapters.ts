@@ -128,31 +128,77 @@ export function toRecentWork(objectives: Objective[]): ObjectiveCardData[] {
   });
 }
 
+const ATTACHMENT_REGEX = /\[attachment:(.+?)\]/;
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
+
+function isImageFile(filename: string): boolean {
+  const ext = filename.substring(filename.lastIndexOf('.')).toLowerCase();
+  return IMAGE_EXTENSIONS.includes(ext);
+}
+
 export function toMessages(messages: InboxMessage[]): ChatMessage[] {
-  return messages.map(m => {
+  return messages.flatMap(m => {
     if (m.sender === 'max') {
-      return {
+      const match = ATTACHMENT_REGEX.exec(m.message);
+      if (match) {
+        const filename = match[1];
+        const timestamp = m.created_at * 1000;
+        const textPart = m.message.replace(ATTACHMENT_REGEX, '').trim();
+        const result: ChatMessage[] = [];
+
+        if (textPart) {
+          result.push({
+            id: m.id,
+            kind: 'user' as const,
+            text: textPart,
+            timestamp,
+          });
+        }
+
+        if (isImageFile(filename)) {
+          result.push({
+            id: m.id + '-attachment',
+            kind: 'image' as const,
+            uri: '/api/uploads/' + filename,
+            width: 0,
+            height: 0,
+            timestamp,
+          });
+        } else {
+          result.push({
+            id: m.id + '-attachment',
+            kind: 'file' as const,
+            name: filename,
+            size: '',
+            timestamp,
+          });
+        }
+
+        return result;
+      }
+
+      return [{
         id: m.id,
         kind: 'user' as const,
         text: m.message,
         timestamp: m.created_at * 1000,
-      };
+      }];
     }
     if (m.sender === 'system') {
-      return {
+      return [{
         id: m.id,
         kind: 'agent' as const,
         text: m.message,
         whisper: 'system',
         timestamp: m.created_at * 1000,
-      };
+      }];
     }
-    return {
+    return [{
       id: m.id,
       kind: 'agent' as const,
       text: m.message,
       timestamp: m.created_at * 1000,
-    };
+    }];
   });
 }
 

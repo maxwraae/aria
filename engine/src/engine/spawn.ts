@@ -11,8 +11,10 @@ import {
   createTurn,
   stampMessages,
   insertMessage,
+  resolveCascadeId,
   InboxMessage,
 } from "../db/queries.js";
+import { generateId } from "../db/utils.js";
 import { assembleContext } from "../context/assembler.js";
 import personaBrick from "../context/bricks/persona/index.js";
 import contractBrick from "../context/bricks/contract/index.js";
@@ -87,10 +89,13 @@ export async function spawnTurn(
   // 6. Create turn record
   const turn = createTurn(db, { objective_id: objectiveId });
 
-  // 7. Stamp inbox messages with turn ID
+  // 7. Resolve cascade_id from unprocessed messages (before stamping)
+  const cascadeId = resolveCascadeId(db, objectiveId);
+
+  // 8. Stamp inbox messages with turn ID
   stampMessages(db, objectiveId, turn.id);
 
-  // 8. Spawn claude -p
+  // 9. Spawn claude -p
   const claudePath = process.env.CLAUDE_PATH ?? join(homedir(), '.local', 'bin', 'claude');
   const proc = spawn(
     claudePath,
@@ -114,6 +119,7 @@ export async function spawnTurn(
         CLAUDECODE: "",
         CLAUDE_CODE_ENTRYPOINT: "",
         ARIA_OBJECTIVE_ID: objectiveId,
+        ARIA_CASCADE_ID: cascadeId ?? "",
       },
       cwd: obj?.cwd ?? process.env.HOME,
       stdio: ["pipe", "pipe", "pipe"],
@@ -132,6 +138,7 @@ export async function spawnTurn(
       objective_id: objectiveId,
       message: `[system] Agent spawn failed: ${err.message}`,
       sender: "system",
+      cascade_id: generateId(),
     });
     try { fs.unlinkSync(`/tmp/aria-context-${objectiveId}.md`); } catch {}
   });

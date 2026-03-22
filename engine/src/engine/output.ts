@@ -8,6 +8,7 @@ import {
   insertMessage,
   updateStatus,
   updateLastError,
+  resetFailCount,
 } from "../db/queries.js";
 import { isWorker, getCoordinatorUrl } from "../db/node.js";
 
@@ -168,6 +169,8 @@ export function processOutput(
         `[${tag}] Turn complete, status: needs-input (silent failure captured)\n`
       );
     } else {
+      // Successful turn — reset fail_count so circuit breaker tracks consecutive failures only
+      resetFailCount(db, objectiveId);
       process.stderr.write(
         `[${tag}] Turn complete, status: ${currentStatus}\n`
       );
@@ -176,11 +179,13 @@ export function processOutput(
     // 3. Store the assistant's response in the objective's own inbox
     //    Stamp with turnId so it doesn't re-trigger the engine
     if (lastAssistantText) {
+      const cascadeId = process.env.ARIA_CASCADE_ID || undefined;
       const selfMsg = insertMessage(db, {
         objective_id: objectiveId,
         message: lastAssistantText,
         sender: objectiveId,
         type: "reply",
+        cascade_id: cascadeId,
       });
       db.prepare("UPDATE inbox SET turn_id = ? WHERE id = ?").run(turnId, selfMsg.id);
 
@@ -199,6 +204,7 @@ export function processOutput(
             message: lastAssistantText,
             sender: objectiveId,
             type: "reply",
+            cascade_id: cascadeId,
           });
         }
       }

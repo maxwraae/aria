@@ -2,6 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import { execSync } from 'node:child_process';
 import path from 'path';
+import os from 'os';
 import { WebSocketServer, WebSocket } from 'ws';
 import Database from 'better-sqlite3';
 import {
@@ -23,6 +24,7 @@ import {
   PROTECTED_IDS,
 } from '../db/queries.js';
 import { subscribe, unsubscribe, type StreamCallback } from '../engine/streams.js';
+import { generateId } from '../db/utils.js';
 import { getTTS } from './tts.js';
 
 // ── MIME types for static serving ─────────────────────────────────
@@ -79,7 +81,6 @@ function matchRoute(pathname: string, pattern: string): Record<string, string> |
 
 export function startServer(
   db: Database.Database,
-  nudge: () => void,
   surfaceDist: string | null,
   port: number = 8080
 ): http.Server {
@@ -149,7 +150,7 @@ export function startServer(
       const convParams = matchRoute(pathname, '/api/objectives/:id/conversation');
       if (method === 'GET' && convParams) {
         const limit = parseInt(url.searchParams.get('limit') ?? '100', 10);
-        const messages = getConversation(db, convParams.id).slice(0, limit);
+        const messages = getConversation(db, convParams.id, limit);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(messages));
         return;
@@ -176,8 +177,8 @@ export function startServer(
             objective_id: newObj.id,
             message: body.instructions as string,
             sender: 'max',
+            cascade_id: generateId(),
           });
-          nudge();
         }
         res.writeHead(201, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(newObj));
@@ -199,8 +200,8 @@ export function startServer(
           objective_id: msgParams.id,
           message,
           sender,
+          cascade_id: generateId(),
         });
-        nudge();
         res.writeHead(201, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(msg));
         return;
@@ -228,8 +229,8 @@ export function startServer(
             objective_id: newObj.id,
             message,
             sender: 'max',
+            cascade_id: generateId(),
           });
-          nudge();
           res.writeHead(201, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ routed: true, objectiveId: newObj.id, created: true }));
           return;
@@ -250,8 +251,9 @@ export function startServer(
             objective_id: matches[0].id,
             message,
             sender: 'max',
+            cascade_id: generateId(),
           });
-          nudge();
+
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ routed: true, objectiveId: matches[0].id }));
           return;
@@ -296,11 +298,13 @@ export function startServer(
         setResolutionSummary(db, succeedParams.id, summary);
         cascadeAbandon(db, succeedParams.id);
 
+        const succeedCascade = generateId();
         insertMessage(db, {
           objective_id: succeedParams.id,
           message: summary,
           sender: 'system',
           type: 'reply',
+          cascade_id: succeedCascade,
         });
 
         if (obj.parent) {
@@ -309,6 +313,7 @@ export function startServer(
             message: `[resolved] ${obj.objective}: ${summary}`,
             sender: succeedParams.id,
             type: 'reply',
+            cascade_id: succeedCascade,
           });
         }
 
@@ -352,6 +357,7 @@ export function startServer(
             message: `[failed] ${obj.objective}: ${reason}`,
             sender: failParams.id,
             type: 'reply',
+            cascade_id: generateId(),
           });
         }
 
@@ -386,6 +392,7 @@ export function startServer(
           message: feedback,
           sender: caller,
           type: 'message',
+          cascade_id: generateId(),
         });
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -435,6 +442,7 @@ export function startServer(
           objective_id: 'root',
           message: '[notify] ' + message,
           sender,
+          cascade_id: generateId(),
           type: 'signal',
         });
 
@@ -456,7 +464,7 @@ export function startServer(
           SELECT DISTINCT o.* FROM objectives o
           JOIN inbox i ON i.objective_id = o.id
           WHERE i.turn_id IS NULL
-          AND o.status IN ('idle', 'needs-input')
+          AND o.status = 'idle'
           AND o.machine = ?
         `).all(machine);
 
@@ -538,6 +546,45 @@ export function startServer(
         const results = searchObjectives(db, q);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(results));
+        return;
+      }
+
+      // POST /api/upload
+      if (method === 'POST' && pathname === '/api/upload') {
+        const uploadsDir = path.join(os.homedir(), '.aria', 'uploads');
+        fs.mkdirSync(uploadsDir, { recursive: true });
+        const body = await parseBody(req);
+        const rawName = (body.name as string) ?? '';
+        const name = rawName.replace(/[/\\]/g, '');
+        const filename = `${Date.now()}-${name}`;
+        const buffer = Buffer.from(body.data as string, 'base64');
+        fs.writeFileSync(path.join(uploadsDir, filename), buffer);
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        res.writeHead(200, headers);
+        res.end(JSON.stringify({ filename }));
+        return;
+      }
+
+      // GET /api/uploads/:filename
+      if (method === 'GET' && pathname.startsWith('/api/uploads/')) {
+        const uploadsDir = path.join(os.homedir(), '.aria', 'uploads');
+        const rawFilename = pathname.slice('/api/uploads/'.length);
+        const filename = rawFilename.replace(/[/\\]/g, '');
+        const fullPath = path.join(uploadsDir, filename);
+        try {
+          const stat = fs.statSync(fullPath);
+          if (stat.isFile()) {
+            const ext = path.extname(fullPath);
+            const mimeType = MIME_TYPES[ext] ?? 'application/octet-stream';
+            res.writeHead(200, { 'Content-Type': mimeType });
+            fs.createReadStream(fullPath).pipe(res);
+            return;
+          }
+        } catch {
+          // File doesn't exist
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
         return;
       }
 
