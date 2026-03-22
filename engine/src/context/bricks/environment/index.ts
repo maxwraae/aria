@@ -3,7 +3,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import os from "os";
 import type { Brick, BrickContext, BrickResult } from "../../types.js";
-import { getObjective } from "../../../db/queries.js";
+import { getObjective, getUnprocessedMessages, getSenderRelation, getTurnCount } from "../../../db/queries.js";
 import { countTokens } from "../../tokens.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -47,6 +47,45 @@ const environmentBrick: Brick = {
       }
     }
 
+    // Build "This cycle" section when db is available
+    let cycleSection = "";
+    if (ctx.db && ctx.objectiveId) {
+      const obj = getObjective(ctx.db, ctx.objectiveId);
+      if (obj) {
+        const previousTurns = getTurnCount(ctx.db, ctx.objectiveId);
+        const turnNumber = previousTurns + 1;
+
+        // Get unique sender labels from unprocessed messages
+        const unprocessed = getUnprocessedMessages(ctx.db, ctx.objectiveId);
+        const seenSenders = new Set<string>();
+        const triggerLabels: string[] = [];
+        for (const msg of unprocessed) {
+          if (!seenSenders.has(msg.sender)) {
+            seenSenders.add(msg.sender);
+            const tag = getSenderRelation(ctx.db, msg.sender, ctx.objectiveId);
+            triggerLabels.push(tag.label);
+          }
+        }
+
+        const lines: string[] = [
+          `## This cycle`,
+          ``,
+          `Turn: ${turnNumber}`,
+        ];
+        if (triggerLabels.length > 0) {
+          lines.push(`Triggered by: ${triggerLabels.join(", ")}`);
+        }
+        lines.push(`Depth: ${obj.depth}`);
+        lines.push(`Important: ${obj.important ? "yes" : "no"}`);
+        lines.push(`Urgent: ${obj.urgent ? "yes" : "no"}`);
+        if (obj.fail_count > 0) {
+          lines.push(`Failures: ${obj.fail_count}`);
+        }
+
+        cycleSection = "\n\n" + lines.join("\n");
+      }
+    }
+
     // Build dynamic header
     const header = `# ENVIRONMENT
 
@@ -63,7 +102,7 @@ Objective ID: ${objectiveId} (env: ARIA_OBJECTIVE_ID)
     const machineBody = readFileSync(join(__dirname, machineFile), "utf-8");
     const sharedBody = readFileSync(join(__dirname, "environment.md"), "utf-8");
 
-    const content = header + "\n\n" + machineBody + "\n\n" + sharedBody;
+    const content = header + cycleSection + "\n\n" + machineBody + "\n\n" + sharedBody;
 
     return {
       name: "ENVIRONMENT",

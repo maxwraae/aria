@@ -73,9 +73,11 @@ interface ChatCardProps {
   speakingMessageId?: string | null;
   /** Dynamic time-of-day color for the objective title */
   titleColor?: string;
+  /** Called when user picks a file to upload */
+  onUpload?: (file: File) => Promise<void>;
 }
 
-export function ChatCard({ session, focused = false, style, onDescend, onResolve, onAddChild, onRename, childCount = 0, resolvedCount = 0, scrollEnabled = true, urgent, important, onSend, streamingText, machine, onSetMachine, onSetModel, onSpeak, speakingMessageId, titleColor }: ChatCardProps) {
+export function ChatCard({ session, focused = false, style, onDescend, onResolve, onAddChild, onRename, childCount = 0, resolvedCount = 0, scrollEnabled = true, urgent, important, onSend, streamingText, machine, onSetMachine, onSetModel, onSpeak, speakingMessageId, titleColor, onUpload }: ChatCardProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(session.messages);
 
   // Sync messages when the parent refreshes session.messages (e.g. after API reply loads)
@@ -85,6 +87,7 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
   const [text, setText] = useState("");
   const [inputHeight, setInputHeight] = useState(20);
   const cardRef = useRef<View>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
@@ -227,7 +230,16 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
         pointerEvents: "none",
       } as any : undefined,
       style,
-    ]}>
+    ]}
+    {...(Platform.OS === "web" ? {
+      onDragOver: (e: any) => { e.preventDefault(); },
+      onDrop: (e: any) => {
+        e.preventDefault();
+        const file = e.dataTransfer?.files?.[0];
+        if (file && onUpload) onUpload(file);
+      },
+    } : {})}
+    >
       {/* Header — entire bar is clickable */}
       <Pressable
         onPress={handleHeaderPress}
@@ -327,6 +339,23 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
       {/* Card input bar */}
       {session.status !== "resolved" && <View style={styles.inputArea}>
         <View style={styles.inputRow}>
+          {Platform.OS === 'web' && onUpload && (
+            <>
+              <input
+                ref={fileInputRef as any}
+                type="file"
+                style={{ position: 'absolute', width: 0, height: 0, opacity: 0 }}
+                onChange={(e: any) => {
+                  const file = e.target?.files?.[0];
+                  if (file) onUpload(file);
+                  if (fileInputRef.current) fileInputRef.current.value = '';
+                }}
+              />
+              <GlassButton size={28} onPress={() => (fileInputRef.current as any)?.click()}>
+                <Text style={{ fontSize: 14, color: 'rgba(0,0,0,0.35)' }}>+</Text>
+              </GlassButton>
+            </>
+          )}
           <TextInput
             style={[styles.input, { height: inputHeight }]}
             value={text}

@@ -14,15 +14,18 @@ import {
   getReadySchedules,
   deleteSchedule,
   bumpSchedule,
+  syncFromPeer,
+  hasUnprocessedMaxMessage,
 } from '../db/queries.js';
 import { getMachineId } from '../db/node.js';
+import { generateId } from '../db/utils.js';
 import { parseInterval } from '../cli/parse-interval.js';
-import { isMaxActive, atConcurrencyLimit } from './concurrency.js';
+import { getMaxActiveSet, getConcurrencyLimit, atConcurrencyLimit } from './concurrency.js';
 import { spawnTurn } from './spawn.js';
 
-const POLL_INTERVAL = 5000; // 5 seconds
-const STUCK_THRESHOLD = 10 * 60; // 10 minutes
-const MAX_FAIL_COUNT = 3;
+const POLL_INTERVAL = 1000; // 1 second
+const STUCK_THRESHOLD = 30 * 60; // 30 minutes
+const MAX_FAIL_COUNT = 2;
 const PRUNE_INTERVAL = 60 * 60; // 1 hour between prune sweeps
 const STALE_THRESHOLD_DAYS = 14;
 const BACKUP_CHECK_INTERVAL = 60 * 60; // 1 hour between backup health checks
@@ -31,7 +34,7 @@ const BACKUP_MAX_AGE_HOURS = 25;
 let lastPruneTime = 0;
 let lastBackupCheckTime = 0;
 
-export function startEngine(db: Database.Database): { nudge: () => void } {
+export function startEngine(db: Database.Database): void {
   const machineId = getMachineId();
   console.log(`[engine] Machine: ${machineId}`);
 
@@ -45,7 +48,7 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
   }
 
   console.log('[engine] ARIA engine started');
-  console.log('[engine] Poll interval: 5s, Max concurrent: 3');
+  console.log('[engine] Poll interval: 1s, Max concurrent: 3');
   console.log('[engine] Waiting for messages...');
 
   function fireReadySchedules() {
@@ -56,6 +59,7 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
         message: schedule.message,
         sender: 'system',
         type: 'message',
+        cascade_id: generateId(),
       });
       console.log(`[engine] Fired schedule ${schedule.id.slice(0, 8)} → ${schedule.objective_id.slice(0, 8)}`);
 
@@ -119,7 +123,8 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
 
   async function poll() {
     try {
-      // Peer sync removed — data flows via HTTP push from workers
+      // Sync objectives, inbox, and turns from peer database
+      syncFromPeer(db);
 
       // 1. Fire any ready schedules
       fireReadySchedules();
@@ -132,7 +137,8 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
 
       // 2. Get objectives with unprocessed messages
       const pending = getPendingObjectives(db);
-      const maxActive = isMaxActive(db);
+      const maxActiveSet = getMaxActiveSet(db);
+      const cap = getConcurrencyLimit(maxActiveSet);
 
       // Filter by machine assignment
       const myPending = pending.filter(obj => {
@@ -140,23 +146,42 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
         return obj.machine === machineId;
       });
 
+      // Separate Max-direct objectives (have unprocessed Max message) from autonomous
+      const maxDirect: typeof myPending = [];
+      const autonomous: typeof myPending = [];
       for (const obj of myPending) {
-        if (atConcurrencyLimit(db)) break;
-
-        // When Max is active, only run Max's messages and urgent items
-        if (maxActive && !obj.urgent) {
-          const hasMaxMessage = db.prepare(
-            "SELECT 1 FROM inbox WHERE objective_id = ? AND turn_id IS NULL AND sender = 'max' LIMIT 1"
-          ).get(obj.id);
-
-          if (!hasMaxMessage) continue;
+        if (hasUnprocessedMaxMessage(db, obj.id)) {
+          maxDirect.push(obj);
+        } else {
+          autonomous.push(obj);
         }
+      }
+
+      // Max-direct objectives bypass concurrency — spawn immediately
+      for (const obj of maxDirect) {
+        console.log(`[engine] Spawning turn for ${obj.id.slice(0, 8)} "${obj.objective}" (max-direct, bypasses cap)`);
+        spawnTurn(db, obj.id);
+      }
+
+      // Sort autonomous: max_active objectives first, then normal priority tiebreakers
+      autonomous.sort((a, b) => {
+        const aActive = maxActiveSet.has(a.id) ? 1 : 0;
+        const bActive = maxActiveSet.has(b.id) ? 1 : 0;
+        if (bActive !== aActive) return bActive - aActive; // max_active first
+        // Within same tier, use existing order (urgent > important > oldest)
+        if (b.urgent !== a.urgent) return b.urgent - a.urgent;
+        if (b.important !== a.important) return b.important - a.important;
+        return a.created_at - b.created_at;
+      });
+
+      for (const obj of autonomous) {
+        if (atConcurrencyLimit(db, machineId, cap)) break;
 
         console.log(`[engine] Spawning turn for ${obj.id.slice(0, 8)} "${obj.objective}"`);
         spawnTurn(db, obj.id);
       }
 
-      // 3. Recover stuck objectives (thinking > 10 min)
+      // 3. Recover stuck objectives (thinking > 30 min)
       const stuck = getStuckObjectives(db, STUCK_THRESHOLD);
       for (const obj of stuck) {
         const failCount = incrementFailCount(db, obj.id);
@@ -174,6 +199,7 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
             objective_id: obj.id,
             message: `[system] This objective has failed ${failCount} times and needs your attention.\n\nLast error: ${errorSnippet}`,
             sender: 'system',
+            cascade_id: generateId(),
           });
           console.log(`[engine] ${obj.id.slice(0, 8)} stuck ${failCount} times, set to needs-input`);
 
@@ -199,13 +225,5 @@ export function startEngine(db: Database.Database): { nudge: () => void } {
 
   // Run immediately, then on interval
   poll();
-  let intervalId = setInterval(poll, POLL_INTERVAL);
-
-  function nudge(): void {
-    clearInterval(intervalId);
-    poll();
-    intervalId = setInterval(poll, POLL_INTERVAL);
-  }
-
-  return { nudge };
+  setInterval(poll, POLL_INTERVAL);
 }

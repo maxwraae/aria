@@ -53,6 +53,20 @@ export function initDb(): Database.Database {
     db.exec("ALTER TABLE objectives ADD COLUMN last_error TEXT");
   }
 
+  // Migration: add depth column if missing
+  if (!cols.some((c) => c.name === "depth")) {
+    db.exec("ALTER TABLE objectives ADD COLUMN depth INTEGER DEFAULT 0");
+    // Backfill depth for existing objectives using recursive CTE
+    db.exec(`
+      WITH RECURSIVE tree AS (
+        SELECT id, 0 AS d FROM objectives WHERE parent IS NULL
+        UNION ALL
+        SELECT o.id, t.d + 1 FROM objectives o JOIN tree t ON o.parent = t.id
+      )
+      UPDATE objectives SET depth = (SELECT d FROM tree WHERE tree.id = objectives.id)
+    `);
+  }
+
   // FTS5 virtual tables don't support IF NOT EXISTS, so check manually
   const ftsExists = db
     .prepare(
@@ -108,6 +122,11 @@ export function initDb(): Database.Database {
   const inboxCols = db.prepare(`PRAGMA table_info(inbox)`).all() as Array<{name: string}>;
   if (!inboxCols.some(c => c.name === 'processed_by')) {
     db.exec(`ALTER TABLE inbox ADD COLUMN processed_by TEXT`);
+  }
+
+  // Migration: add cascade_id column to inbox if missing
+  if (!inboxCols.some(c => c.name === 'cascade_id')) {
+    db.exec(`ALTER TABLE inbox ADD COLUMN cascade_id TEXT`);
   }
 
   // Seed root objective if it doesn't exist
