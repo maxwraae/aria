@@ -166,11 +166,18 @@ export function startServer(
           res.end(JSON.stringify({ error: 'objective required' }));
           return;
         }
+        let inheritedMachine: string | undefined;
+        if (body.parent) {
+          const parentObj = getObjective(db, body.parent as string);
+          if (parentObj?.machine) inheritedMachine = parentObj.machine;
+        }
+
         const newObj = createObjective(db, {
           objective,
           description: (body.description as string) ?? undefined,
           parent: (body.parent as string) ?? undefined,
           model: (body.model as string) ?? undefined,
+          machine: inheritedMachine,
         });
         // If instructions provided, send as first message
         if (body.instructions) {

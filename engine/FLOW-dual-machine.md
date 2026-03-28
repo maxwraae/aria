@@ -78,6 +78,18 @@ The surface has a toggle on each objective card: **Auto** or **MB** (MacBook). W
 
 Toggling back to Auto sets `machine` to null, which reverses the assignment: Mini resumes, MacBook stops. The agent's environment brick will reflect the new machine context the next time a turn is spawned.
 
+### Machine Cascade
+
+Machine assignment cascades downward through the entire subtree. When you toggle an objective's machine, every active descendant (children, grandchildren, etc.) immediately updates to match. The `cascadeMachine` function in `queries.ts` walks the tree recursively, skipping objectives that are already resolved, failed, or abandoned.
+
+This means you can set a top-level objective to MacBook and know that everything spawned under it — by agents, by the API, by Max — will stay on the MacBook. The assignment is permanent until explicitly changed.
+
+You can also override deeper in the tree. If a MacBook subtree has one branch that should run on Mini, toggle that branch node — it and its descendants switch to Mini while the rest of the subtree stays on MacBook. The most recent explicit change always wins downward.
+
+### Machine Inheritance
+
+When a new objective is created — whether by an agent calling `aria create` or by the surface calling `POST /api/objectives` — it inherits the `machine` field from its parent. An agent running on the MacBook that spawns a child doesn't need to think about machine assignment; the child automatically belongs to the same machine as its parent. This keeps entire work trees co-located on the machine that owns the root.
+
 ---
 
 ## Cross-Machine Messaging
