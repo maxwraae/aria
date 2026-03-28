@@ -208,6 +208,7 @@ export function updateObjective(db: Database.Database, id: string, fields: { obj
   }
   if (fields.machine !== undefined) {
     stmt(db, "updateObjectiveMachine", "UPDATE objectives SET machine = ?, updated_at = ? WHERE id = ?").run(fields.machine, ts, id);
+    cascadeMachine(db, id, fields.machine);
   }
   if (fields.model !== undefined) {
     stmt(db, "updateObjectiveModel", "UPDATE objectives SET model = ?, updated_at = ? WHERE id = ?").run(fields.model, ts, id);
@@ -252,6 +253,27 @@ export function cascadeAbandon(db: Database.Database, parentId: string): void {
     }
   });
   abandon();
+}
+
+export function cascadeMachine(db: Database.Database, parentId: string, machine: string | null): void {
+  const cascade = db.transaction(() => {
+    const ts = now();
+    const children = stmt(
+      db,
+      "getChildrenForCascade",
+      "SELECT id FROM objectives WHERE parent = ? AND status NOT IN ('resolved', 'failed', 'abandoned')"
+    ).all(parentId) as { id: string }[];
+
+    for (const child of children) {
+      stmt(
+        db,
+        "updateObjectiveMachine",
+        "UPDATE objectives SET machine = ?, updated_at = ? WHERE id = ?"
+      ).run(machine, ts, child.id);
+      cascadeMachine(db, child.id, machine);
+    }
+  });
+  cascade();
 }
 
 export function resetFailCount(db: Database.Database, id: string): void {

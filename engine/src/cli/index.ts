@@ -273,6 +273,7 @@ function cmdCreate(rawArgs: string[]): void {
     objective: objectiveText,
     parent: parentId,
     model,
+    machine: parent.machine ?? undefined,
   });
 
   if (instructions) {
