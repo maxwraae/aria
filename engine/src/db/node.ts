@@ -27,6 +27,7 @@ export function getDataDir(): string {
 }
 
 export function getLocalDbPath(): string {
+  if (process.env.ARIA_DB) return process.env.ARIA_DB;
   return path.join(getDataDir(), `${getMachineId()}.db`);
 }
 

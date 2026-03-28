@@ -34,7 +34,7 @@ const BACKUP_MAX_AGE_HOURS = 25;
 let lastPruneTime = 0;
 let lastBackupCheckTime = 0;
 
-export function startEngine(db: Database.Database): void {
+export function startEngine(db: Database.Database): () => void {
   const machineId = getMachineId();
   console.log(`[engine] Machine: ${machineId}`);
 
@@ -121,6 +121,47 @@ export function startEngine(db: Database.Database): void {
     }
   }
 
+  function processQueue() {
+    const pending = getPendingObjectives(db);
+    const maxActiveSet = getMaxActiveSet(db);
+    const cap = getConcurrencyLimit(maxActiveSet);
+
+    const myPending = pending.filter(obj => {
+      if (!obj.machine) return machineId === 'mini';
+      return obj.machine === machineId;
+    });
+
+    const maxDirect: typeof myPending = [];
+    const autonomous: typeof myPending = [];
+    for (const obj of myPending) {
+      if (hasUnprocessedMaxMessage(db, obj.id)) {
+        maxDirect.push(obj);
+      } else {
+        autonomous.push(obj);
+      }
+    }
+
+    for (const obj of maxDirect) {
+      console.log(`[engine] Spawning turn for ${obj.id.slice(0, 8)} "${obj.objective}" (max-direct, bypasses cap)`);
+      spawnTurn(db, obj.id);
+    }
+
+    autonomous.sort((a, b) => {
+      const aActive = maxActiveSet.has(a.id) ? 1 : 0;
+      const bActive = maxActiveSet.has(b.id) ? 1 : 0;
+      if (bActive !== aActive) return bActive - aActive;
+      if (b.urgent !== a.urgent) return b.urgent - a.urgent;
+      if (b.important !== a.important) return b.important - a.important;
+      return a.created_at - b.created_at;
+    });
+
+    for (const obj of autonomous) {
+      if (atConcurrencyLimit(db, machineId, cap)) break;
+      console.log(`[engine] Spawning turn for ${obj.id.slice(0, 8)} "${obj.objective}"`);
+      spawnTurn(db, obj.id);
+    }
+  }
+
   async function poll() {
     try {
       // Sync objectives, inbox, and turns from peer database
@@ -135,51 +176,8 @@ export function startEngine(db: Database.Database): void {
       // 1.6. Check backup health (runs once per hour)
       checkBackupHealth();
 
-      // 2. Get objectives with unprocessed messages
-      const pending = getPendingObjectives(db);
-      const maxActiveSet = getMaxActiveSet(db);
-      const cap = getConcurrencyLimit(maxActiveSet);
-
-      // Filter by machine assignment
-      const myPending = pending.filter(obj => {
-        if (!obj.machine) return machineId === 'mini'; // unassigned defaults to mini
-        return obj.machine === machineId;
-      });
-
-      // Separate Max-direct objectives (have unprocessed Max message) from autonomous
-      const maxDirect: typeof myPending = [];
-      const autonomous: typeof myPending = [];
-      for (const obj of myPending) {
-        if (hasUnprocessedMaxMessage(db, obj.id)) {
-          maxDirect.push(obj);
-        } else {
-          autonomous.push(obj);
-        }
-      }
-
-      // Max-direct objectives bypass concurrency — spawn immediately
-      for (const obj of maxDirect) {
-        console.log(`[engine] Spawning turn for ${obj.id.slice(0, 8)} "${obj.objective}" (max-direct, bypasses cap)`);
-        spawnTurn(db, obj.id);
-      }
-
-      // Sort autonomous: max_active objectives first, then normal priority tiebreakers
-      autonomous.sort((a, b) => {
-        const aActive = maxActiveSet.has(a.id) ? 1 : 0;
-        const bActive = maxActiveSet.has(b.id) ? 1 : 0;
-        if (bActive !== aActive) return bActive - aActive; // max_active first
-        // Within same tier, use existing order (urgent > important > oldest)
-        if (b.urgent !== a.urgent) return b.urgent - a.urgent;
-        if (b.important !== a.important) return b.important - a.important;
-        return a.created_at - b.created_at;
-      });
-
-      for (const obj of autonomous) {
-        if (atConcurrencyLimit(db, machineId, cap)) break;
-
-        console.log(`[engine] Spawning turn for ${obj.id.slice(0, 8)} "${obj.objective}"`);
-        spawnTurn(db, obj.id);
-      }
+      // 2. Process pending messages and spawn turns
+      processQueue();
 
       // 3. Recover stuck objectives (thinking > 30 min)
       const stuck = getStuckObjectives(db, STUCK_THRESHOLD);
@@ -223,7 +221,19 @@ export function startEngine(db: Database.Database): void {
     }
   }
 
+  // Nudge: instantly process queue when server inserts a message
+  let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
+  function nudge(): void {
+    if (nudgeTimer) return;
+    nudgeTimer = setTimeout(() => {
+      nudgeTimer = null;
+      try { processQueue(); }
+      catch (err) { console.error('[engine] Nudge error:', err); }
+    }, 50);
+  }
+
   // Run immediately, then on interval
   poll();
   setInterval(poll, POLL_INTERVAL);
+  return nudge;
 }

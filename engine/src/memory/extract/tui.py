@@ -24,6 +24,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent
 BATCH_DB = SCRIPT_DIR / "batch.db"
 MEMORIES_DB = Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/Aria/data/memories.db"
+PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 # ---------------------------------------------------------------------------
 # ANSI color helpers — pure functions, return strings
@@ -221,6 +222,14 @@ def horizontal_line(width: int) -> str:
     return "─" * width
 
 
+def load_prompt_text(prompt_type: str) -> str:
+    """Load the extraction prompt for a type. Returns text or error message."""
+    path = PROMPTS_DIR / f"{prompt_type}.txt"
+    if not path.exists():
+        return f"(prompt file not found: {path})"
+    return path.read_text()
+
+
 def box(title: str, lines: list[str], width: int) -> str:
     """Draw a bordered box with an embedded title in the top border.
 
@@ -269,6 +278,8 @@ def fetch_overview_data() -> dict:
         "total_sessions": 0,
         "by_status": {},
         "last_run": None,
+        "type_progress": {},
+        "extractable_sessions": 0,
     }
 
     # memories.db
@@ -299,6 +310,25 @@ def fetch_overview_data() -> dict:
                 "SELECT status, COUNT(*) FROM sessions GROUP BY status"
             ):
                 data["by_status"][r["status"]] = r[1]
+            # Per-type extraction progress from session_types
+            data["type_progress"] = {}
+            try:
+                for r in cur.execute(
+                    "SELECT prompt_type, status, COUNT(*) as n FROM session_types GROUP BY prompt_type, status"
+                ):
+                    pt = r["prompt_type"]
+                    if pt not in data["type_progress"]:
+                        data["type_progress"][pt] = {"done": 0, "pending": 0, "error": 0, "skipped": 0, "running": 0}
+                    st = r["status"]
+                    if st in data["type_progress"][pt]:
+                        data["type_progress"][pt][st] = r["n"]
+            except sqlite3.OperationalError:
+                pass  # session_types table may not exist yet
+
+            # Extractable sessions (total minus skipped)
+            skipped = data["by_status"].get("skipped", 0)
+            data["extractable_sessions"] = data["total_sessions"] - skipped
+
             last = cur.execute(
                 "SELECT * FROM runs ORDER BY id DESC LIMIT 1"
             ).fetchone()
@@ -642,6 +672,51 @@ def render_detail(memory: dict) -> str:
     return "\n".join(lines)
 
 
+def render_prompt(prompt_type: str, prompt_text: str, scroll_offset: int) -> str:
+    """Render the prompt viewer for an extraction type."""
+    cols, rows = get_terminal_size()
+    content_width = cols - 4
+
+    all_lines = []
+
+    # Header
+    header_left = bold(f"{prompt_type}")
+    header_right = dim("Extraction Prompt")
+    gap = max(1, cols - 2 - visible_len(header_left) - visible_len(header_right))
+    all_lines.append(f"\n  {header_left}{' ' * gap}{header_right}\n")
+
+    # Word-wrapped prompt text
+    for raw_line in prompt_text.split("\n"):
+        if not raw_line.strip():
+            all_lines.append("")
+        else:
+            wrapped = textwrap.wrap(raw_line, width=content_width)
+            for w in wrapped:
+                all_lines.append(f"  {w}")
+
+    all_lines.append("")
+
+    # Viewport
+    RESERVED = 5
+    viewport_height = max(1, rows - RESERVED)
+
+    max_scroll = max(0, len(all_lines) - viewport_height)
+    if scroll_offset > max_scroll:
+        scroll_offset = max_scroll
+
+    visible = all_lines[scroll_offset:scroll_offset + viewport_height]
+
+    output_lines = visible[:]
+    if len(all_lines) > viewport_height:
+        indicator = dim(f"  Lines {scroll_offset + 1}-{min(scroll_offset + viewport_height, len(all_lines))} of {len(all_lines)}")
+        output_lines.append(indicator)
+
+    output_lines.append(f"  {dim('[↑↓] Scroll')}  {dim('[q] Back')}")
+    output_lines.append("")
+
+    return "\n".join(output_lines)
+
+
 # ---------------------------------------------------------------------------
 # Overview renderer
 # ---------------------------------------------------------------------------
@@ -656,11 +731,6 @@ def render_overview(data: dict, selected_index: int) -> str:
     by_status = data["by_status"]
     last_run = data["last_run"]
 
-    # Determine max count for progress bar scaling
-    max_count = max((by_type.get(t, 0) for t in _MEMORY_TYPES), default=1)
-    if max_count == 0:
-        max_count = 1
-
     lines = []
 
     # Header
@@ -674,30 +744,31 @@ def render_overview(data: dict, selected_index: int) -> str:
     col_type   = pad(dim("Type"), 14)
     col_count  = pad(dim("Count"), 9)
     col_bar    = pad(dim("Extracted"), 13)
-    col_sess   = dim("Sessions")
+    col_sess   = dim("Extracted")
     lines.append(f"  {col_type}{col_count}{col_bar}{col_sess}")
     lines.append("")
 
     # Per-type rows
+    extractable = data.get("extractable_sessions", 0)
     for i, t in enumerate(_MEMORY_TYPES):
         count = by_type.get(t, 0)
-        done_sessions = by_status.get("done", 0)
+        tp = data.get("type_progress", {}).get(t, {})
+        done = tp.get("done", 0)
+        errors = tp.get("error", 0)
 
-        # Progress bar: count relative to max_count
-        b = bar(count, max_count, width=10)
+        # Progress bar: done relative to extractable sessions
+        b = bar(done, extractable, width=10)
 
-        # Session fraction
-        if total_sessions > 0:
-            pct = done_sessions / total_sessions * 100
-            sess_str = f"{done_sessions:,} / {total_sessions:,} ({pct:.1f}%)"
+        # Session fraction for this type
+        if extractable > 0:
+            pct = done / extractable * 100
+            sess_str = f"{done:,} / {extractable:,} ({pct:.1f}%)"
         else:
-            sess_str = f"0 / 0"
+            sess_str = "0 / 0"
 
-        # Only show session info for types that have memories
-        if count == 0:
-            sess_str = f"0 / {total_sessions:,}"
+        if errors:
+            sess_str += f"  {red(str(errors) + ' err')}"
 
-        # Build the row
         type_col  = pad(t, 12)
         count_col = pad(f"{count:,}", 9)
         bar_col   = pad(b, 13)
@@ -746,6 +817,7 @@ def render_overview(data: dict, selected_index: int) -> str:
     hints = (
         dim("[↑↓] Select type") + "  " +
         dim("[enter] Browse memories") + "  " +
+        dim("[p] View prompt") + "  " +
         dim("[s] Search") + "  " +
         dim("[q] Quit")
     )
@@ -771,6 +843,9 @@ def main():
     browse_scroll: int = 0
     detail_memory: dict = {}
     detail_from: str = 'browse'  # which view to return to from detail
+    prompt_type_view: str = ''
+    prompt_text_view: str = ''
+    prompt_scroll: int = 0
 
     # Search state
     search_query: str = ''
@@ -792,7 +867,9 @@ def main():
                     output = render_browse(browse_type, browse_memories, browse_selected, browse_scroll)
                 elif view == 'search':
                     output = render_search(search_query, search_results, search_selected, search_scroll)
-                else:  # detail
+                elif view == 'prompt':
+                    output = render_prompt(prompt_type_view, prompt_text_view, prompt_scroll)
+                elif view == 'detail':
                     output = render_detail(detail_memory)
 
                 sys.stdout.write(output)
@@ -813,6 +890,11 @@ def main():
                         browse_selected = 0
                         browse_scroll = 0
                         view = 'browse'
+                    elif key == 'p':
+                        prompt_type_view = _MEMORY_TYPES[selected]
+                        prompt_text_view = load_prompt_text(prompt_type_view)
+                        prompt_scroll = 0
+                        view = 'prompt'
                     elif key == 's':
                         search_query = ''
                         search_results = []
@@ -865,7 +947,15 @@ def main():
                         search_selected = 0
                         search_scroll = 0
 
-                else:  # detail
+                elif view == 'prompt':
+                    if key in ('q', 'escape', '\x03'):
+                        view = 'overview'
+                    elif key in ('up', 'k'):
+                        prompt_scroll = max(0, prompt_scroll - 1)
+                    elif key in ('down', 'j'):
+                        prompt_scroll += 1
+
+                elif view == 'detail':
                     if key in ('q', 'escape', '\x03'):
                         view = detail_from
 

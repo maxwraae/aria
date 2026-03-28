@@ -82,7 +82,8 @@ function matchRoute(pathname: string, pattern: string): Record<string, string> |
 export function startServer(
   db: Database.Database,
   surfaceDist: string | null,
-  port: number = 8080
+  port: number = 8080,
+  nudge?: () => void,
 ): http.Server {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -179,6 +180,7 @@ export function startServer(
             sender: 'max',
             cascade_id: generateId(),
           });
+          nudge?.();
         }
         res.writeHead(201, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(newObj));
@@ -202,6 +204,7 @@ export function startServer(
           sender,
           cascade_id: generateId(),
         });
+        nudge?.();
         res.writeHead(201, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(msg));
         return;
@@ -231,6 +234,7 @@ export function startServer(
             sender: 'max',
             cascade_id: generateId(),
           });
+          nudge?.();
           res.writeHead(201, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ routed: true, objectiveId: newObj.id, created: true }));
           return;
@@ -253,6 +257,7 @@ export function startServer(
             sender: 'max',
             cascade_id: generateId(),
           });
+          nudge?.();
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ routed: true, objectiveId: matches[0].id }));
@@ -394,6 +399,7 @@ export function startServer(
           type: 'message',
           cascade_id: generateId(),
         });
+        nudge?.();
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ id: rejectParams.id, status: 'idle' }));
@@ -646,8 +652,7 @@ export function startServer(
   const wss = new WebSocketServer({ server });
 
   wss.on('connection', (ws: WebSocket) => {
-    let watchedObjectiveId: string | null = null;
-    let streamCallback: StreamCallback | null = null;
+    const watchedCallbacks = new Map<string, StreamCallback>();
     let lastTreeJSON = '';
 
     // Send initial tree snapshot
@@ -677,25 +682,27 @@ export function startServer(
         const msg = JSON.parse(data.toString());
 
         if (msg.type === 'watch_objective') {
-          // Unsubscribe from previous objective
-          if (watchedObjectiveId && streamCallback) {
-            unsubscribe(watchedObjectiveId, streamCallback);
-          }
+          const id = msg.objectiveId as string;
+          if (!watchedCallbacks.has(id)) {
 
-          watchedObjectiveId = msg.objectiveId as string;
-
-          // Subscribe to activeStreams for this objective
-          streamCallback = (text: string, done: boolean) => {
+          const cb: StreamCallback = (text: string, done: boolean) => {
             if (ws.readyState !== WebSocket.OPEN) return;
             ws.send(JSON.stringify({
               type: 'turn_stream',
-              objectiveId: watchedObjectiveId,
+              objectiveId: id,
               text,
               done,
             }));
+            // Auto-unwatch when turn completes
+            if (done) {
+              unsubscribe(id, cb);
+              watchedCallbacks.delete(id);
+            }
           };
 
-          subscribe(watchedObjectiveId, streamCallback);
+            watchedCallbacks.set(id, cb);
+            subscribe(id, cb);
+          }
         }
 
         // ── TTS ─────────────────────────────────────────────────
@@ -727,9 +734,10 @@ export function startServer(
     // Cleanup on close
     ws.on('close', () => {
       clearInterval(treeInterval);
-      if (watchedObjectiveId && streamCallback) {
-        unsubscribe(watchedObjectiveId, streamCallback);
+      for (const [id, cb] of watchedCallbacks) {
+        unsubscribe(id, cb);
       }
+      watchedCallbacks.clear();
     });
   });
 

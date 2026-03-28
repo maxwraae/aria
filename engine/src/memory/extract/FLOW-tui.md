@@ -20,13 +20,21 @@ The `view` variable acts as a state machine with four values: `'overview'`, `'br
 
 ## The Overview Screen
 
-`render_overview()` takes the pre-fetched data dict and the current `selected_index` and builds the entire overview as a single string. The five memory types — world, max, people, friction, biology — are hardcoded in `_MEMORY_TYPES`. For each type, it renders a row showing the type name, count, a progress bar scaled relative to the type with the highest count, and session completion stats. The selected row gets a `>` marker and is rendered in cyan; unselected rows have no marker and dimmed session info.
+`render_overview()` takes the pre-fetched data dict and the current `selected_index` and builds the entire overview as a single string. The five memory types — world, max, people, friction, biology — are hardcoded in `_MEMORY_TYPES`. For each type, it renders a row showing the type name, memory count, a progress bar showing extraction completeness, and per-type session stats. The selected row gets a `>` marker and is rendered in cyan; unselected rows have no marker and dimmed session info.
 
-The progress bar from `bar()` uses Unicode block characters: `█` for filled sections and `░` for empty ones. The proportion is `count / max_count` so the bar shows relative density across types rather than absolute completeness. Session stats show `done_sessions / total_sessions` with a percentage. This comes entirely from batch.db — it reflects how many processing sessions have been completed, not type-specific progress.
+The progress bar shows extraction progress per type. `fetch_overview_data()` queries the `session_types` table (compound key `filename, prompt_type`) to get done/error/skipped counts per type, and computes `extractable_sessions` as total sessions minus skipped. The bar proportion is `done_for_type / extractable_sessions`, so each type independently shows what fraction of sessions have been extracted. The session column shows `"done / extractable (pct%)"` per type, with error counts appended in red if any exist.
 
-Below the type table, the last run from batch.db's `runs` table is displayed if one exists. This shows the prompt type, how many sessions were processed, how many memories were extracted, cost in USD, and token counts formatted with K/M suffixes. The `render_overview()` code handles two different column naming conventions for these fields (e.g., `total_cost_usd` vs `cost_usd`) using `get()` with fallback keys, suggesting the schema evolved over time.
+Below the type table, the last run from batch.db's `runs` table is displayed if one exists. This shows the prompt type (or "interleaved" for multi-type runs), how many sessions were processed, how many memories were extracted, cost in USD, and token counts formatted with K/M suffixes. The `render_overview()` code handles two different column naming conventions for these fields (e.g., `total_cost_usd` vs `cost_usd`) using `get()` with fallback keys, suggesting the schema evolved over time.
 
-In the overview key handler, up/down arrows (or `k/j`) move `selected` through the five types, clamped to valid indices. Pressing `s` clears all search state and switches to `'search'`. Pressing `enter` takes the selected type name, calls `fetch_memories()` to load up to 200 memories of that type from memories.db ordered newest first, resets `browse_selected` and `browse_scroll` to zero, and sets `view = 'browse'`. Pressing `q` or Ctrl-C breaks the loop.
+In the overview key handler, up/down arrows (or `k/j`) move `selected` through the five types, clamped to valid indices. Pressing `s` clears all search state and switches to `'search'`. Pressing `p` loads the extraction prompt for the selected type and switches to the `'prompt'` view. Pressing `enter` takes the selected type name, calls `fetch_memories()` to load up to 200 memories of that type from memories.db ordered newest first, resets `browse_selected` and `browse_scroll` to zero, and sets `view = 'browse'`. Pressing `q` or Ctrl-C breaks the loop.
+
+## The Prompt Screen
+
+`render_prompt()` displays the full text of the extraction prompt for a selected memory type. When the user presses `p` in the overview, `load_prompt_text()` reads `prompts/{type}.txt` from the filesystem and stores it in `prompt_text_view`. If the file doesn't exist, a placeholder error string is shown instead.
+
+The renderer word-wraps each line of the prompt to `cols - 4` characters and implements vertical scrolling. A viewport is computed as terminal height minus 5 reserved lines (header, spacing, hints). The scroll offset is clamped to prevent scrolling past the end. When the content exceeds the viewport, a line indicator shows the current position (e.g., "Lines 1-25 of 48").
+
+In the prompt key handler, up/down arrows (or `k/j`) scroll one line at a time. Pressing `q`, ESC, or Ctrl-C returns to the overview. No other state is modified during the prompt view, so the overview selection is preserved on return.
 
 ## The Browse Screen
 

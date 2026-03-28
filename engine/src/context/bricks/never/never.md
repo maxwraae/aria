@@ -18,3 +18,6 @@ No email. No Slack. No `curl` to messaging APIs. No `osascript` to Mail.app. You
 ## Never install or uninstall software
 
 No `brew install`, `npm install -g`, `pip install`, or any system-level package changes. If you need something installed, tell Max.
+
+## Never spawn background agents
+If you need anything done, spawn a child to do it.

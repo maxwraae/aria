@@ -3,7 +3,7 @@ import type { Objective, InboxMessage } from './types';
 import type { ChatSession } from '../types/chat';
 import type { NeedsYouItem } from '../components/NeedsYouStrip';
 import type { ObjectiveCardData } from '../components/ObjectiveCard';
-import { buildTree, toNeedsYouItems, toRecentWork, toSession, type ObjectiveNode } from './adapters';
+import { buildTree, toNeedsYouItems, toQuickItems, toRecentWork, toSession, type ObjectiveNode } from './adapters';
 
 function getWsUrl(): string {
   if (typeof window !== 'undefined') {
@@ -29,6 +29,7 @@ export interface UseARIAReturn {
   tree: ObjectiveNode | null;
   objectives: Objective[];
   needsYou: NeedsYouItem[];
+  quickItems: NeedsYouItem[];
   recentWork: ObjectiveCardData[];
   getSession: (id: string) => ChatSession;
   loadConversation: (id: string) => Promise<void>;
@@ -52,6 +53,7 @@ export function useARIA(): UseARIAReturn {
   const [objectives, setObjectives] = useState<Objective[]>([]);
   const [tree, setTree] = useState<ObjectiveNode | null>(null);
   const [needsYou, setNeedsYou] = useState<NeedsYouItem[]>([]);
+  const [quickItems, setQuickItems] = useState<NeedsYouItem[]>([]);
   const [recentWork, setRecentWork] = useState<ObjectiveCardData[]>([]);
   const [connected, setConnected] = useState(false);
   const [streamingText, setStreamingText] = useState<Map<string, string>>(new Map());
@@ -72,6 +74,7 @@ export function useARIA(): UseARIAReturn {
     const builtTree = buildTree(objs);
     setTree(builtTree);
     setNeedsYou(toNeedsYouItems(objs, sessionsRef.current));
+    setQuickItems(toQuickItems(objs, sessionsRef.current));
     setRecentWork(toRecentWork(objs));
   }, []);
 
@@ -148,6 +151,7 @@ export function useARIA(): UseARIAReturn {
         const session = toSession(obj, messages);
         sessionsRef.current.set(id, session);
         setNeedsYou(toNeedsYouItems(objectivesRef.current, sessionsRef.current));
+        setQuickItems(toQuickItems(objectivesRef.current, sessionsRef.current));
       }
     } catch {
       // Network error, will retry on next navigation
@@ -186,6 +190,8 @@ export function useARIA(): UseARIAReturn {
 
   const sendMessage = useCallback(async (objectiveId: string, text: string) => {
     console.log('[useARIA] sendMessage called:', objectiveId, text);
+    // Subscribe to streaming for this objective before sending
+    watchObjective(objectiveId);
     // Optimistically mark as thinking so UI updates instantly
     const cached = sessionsRef.current.get(objectiveId);
     if (cached) {
@@ -343,6 +349,7 @@ export function useARIA(): UseARIAReturn {
     tree,
     objectives,
     needsYou,
+    quickItems,
     recentWork,
     getSession,
     loadConversation,

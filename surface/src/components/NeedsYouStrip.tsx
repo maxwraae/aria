@@ -48,9 +48,10 @@ interface NeedsYouStripProps {
   headerColor?: string;
   onSend?: (objectiveId: string, text: string) => Promise<void> | void;
   streamingText?: Map<string, string>;
+  header?: string;
 }
 
-export function NeedsYouStrip({ items, onNavigate, onExpand, headerColor, onSend, streamingText }: NeedsYouStripProps) {
+export function NeedsYouStrip({ items, onNavigate, onExpand, headerColor, onSend, streamingText, header }: NeedsYouStripProps) {
   const scrollRef = useRef<ScrollView>(null);
 
   // On web: horizontal wheel/trackpad scrolls the strip, vertical passes through to page
@@ -82,7 +83,7 @@ export function NeedsYouStrip({ items, onNavigate, onExpand, headerColor, onSend
         onPress={onExpand}
         style={({ pressed }) => [styles.headerRow, pressed && { opacity: 0.7 }]}
       >
-        <Text style={[styles.sectionHeader, headerColor ? { color: headerColor } : undefined]}>{items.length} needs you</Text>
+        <Text style={[styles.sectionHeader, headerColor ? { color: headerColor } : undefined]}>{header ?? `${items.length} needs you`}</Text>
         <Text style={styles.sectionArrow}>{"\u203A"}</Text>
       </Pressable>
       <ScrollView

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/maxwraae/projects/aiMessage-V3/**)",
+      "Read(//Users/maxwraae/**)"
+    ]
+  }
+}

@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import fs from "fs";
+import path from "path";
 import { now } from "./utils.js";
 import { getLocalDbPath, getDataDir } from "./node.js";
 import { initMemoryTables } from "../memory/schema.js";
@@ -7,10 +8,11 @@ import { initMemoryTables } from "../memory/schema.js";
 export const DB_DIR = getDataDir();
 export const DB_PATH = getLocalDbPath();
 
-export function initDb(): Database.Database {
-  fs.mkdirSync(DB_DIR, { recursive: true });
+export function initDb(dbPath?: string): Database.Database {
+  const resolvedPath = dbPath ?? DB_PATH;
+  fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
 
-  const db = new Database(DB_PATH);
+  const db = new Database(resolvedPath);
   db.pragma("journal_mode = DELETE");
   db.pragma("foreign_keys = ON");
 

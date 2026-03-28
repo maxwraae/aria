@@ -104,6 +104,8 @@ Commands:
   dev                                                    Start engine + surface (development)
   up                                                     Start engine with built surface (production)
   context [objective_id] [--dump|--tui]                   Print assembled context
+  sim --objective "..." [--message "..."]                 Run loop against ephemeral scenario (no persistence)
+  sim --scenario path.json                                Run loop from scenario file
 
 Options:
   --help                                                 Show this help message
@@ -997,6 +999,12 @@ switch (command) {
     cmdContext(args);
     break;
 
+  case 'sim': {
+    const { runSim } = await import('../sim.js');
+    await runSim(args);
+    break;
+  }
+
   case 'dev': {
     const selfScript = decodeURIComponent(new URL(import.meta.url).pathname);
     const surfaceDir = decodeURIComponent(new URL('../../../surface', import.meta.url).pathname);
@@ -1058,9 +1066,9 @@ switch (command) {
   case 'up':
   case 'engine': {
     const engineDb = initDb();
-    startEngine(engineDb);
+    const nudge = startEngine(engineDb);
     const surfaceDist = decodeURIComponent(new URL('../../../surface/dist', import.meta.url).pathname);
-    const server = startServer(engineDb, surfaceDist);
+    const server = startServer(engineDb, surfaceDist, undefined, nudge);
     process.on('SIGINT', () => {
       console.log('\n[engine] Shutting down...');
       server.close();

@@ -1,6 +1,12 @@
+import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 import type { Brick, BrickContext, BrickResult } from "../../types.js";
 import { getObjective, getTurnCount } from "../../../db/queries.js";
 import { countTokens } from "../../tokens.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const objectiveBrick: Brick = {
   name: "OBJECTIVE",
@@ -19,22 +25,23 @@ const objectiveBrick: Brick = {
     if (obj.waiting_on) statusLine += ` — waiting on: ${obj.waiting_on}`;
     statusLine += ` · Turn ${turnCount} · Last updated ${daysSinceUpdate} days ago`;
 
-    const parts: string[] = [];
-    parts.push(`# OBJECTIVE\n\n${obj.objective}`);
+    const template = readFileSync(join(__dirname, "objective.md"), "utf-8");
 
-    if (obj.description) {
-      parts.push(`## Description\n\n${obj.description}`);
-    }
+    const descriptionSection = obj.description
+      ? `## Description\n\n${obj.description}`
+      : "";
 
-    parts.push(`## Status\n\n${statusLine}`);
-
-    const content = parts.join("\n\n");
+    const content = template
+      .replace("{{OBJECTIVE}}", obj.objective)
+      .replace("{{STATUS_LINE}}", statusLine)
+      .replace(obj.description ? "{{DESCRIPTION_SECTION}}" : "\n{{DESCRIPTION_SECTION}}\n", descriptionSection || "");
 
     return {
       name: "OBJECTIVE",
       type: "static" as const,
       content,
       tokens: countTokens(content),
+      meta: { sourcePath: join(__dirname, "objective.md") },
     };
   },
 };
