@@ -381,7 +381,7 @@ export function getPendingObjectives(db: Database.Database): Objective[] {
     `SELECT DISTINCT o.* FROM objectives o
      JOIN inbox i ON i.objective_id = o.id
      WHERE i.turn_id IS NULL
-       AND o.status = 'idle'
+       AND o.status IN ('idle', 'needs-input')
      ORDER BY o.urgent DESC, o.important DESC, o.created_at ASC`
   ).all() as Objective[];
 }

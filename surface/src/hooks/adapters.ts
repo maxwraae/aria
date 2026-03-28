@@ -88,7 +88,7 @@ export function buildParentChain(objectives: Objective[], id: string): string[] 
 
 export function toNeedsYouItems(objectives: Objective[], sessionCache: Map<string, ChatSession>): NeedsYouItem[] {
   return objectives
-    .filter(o => o.parent !== null) // exclude root
+    .filter(o => o.parent !== null && o.id !== 'quick' && o.parent !== 'quick') // exclude root, quick, and quick's children
     .filter(o => o.status === 'needs-input' || o.status === 'waiting-input')
     .sort((a, b) => {
       const scoreA = (a.urgent ? 2 : 0) + (a.important ? 1 : 0);
@@ -108,9 +108,25 @@ export function toNeedsYouItems(objectives: Objective[], sessionCache: Map<strin
     }));
 }
 
+export function toQuickItems(objectives: Objective[], sessionCache: Map<string, ChatSession>): NeedsYouItem[] {
+  return objectives
+    .filter(o => o.parent === 'quick')
+    .filter(o => o.status !== 'resolved' && o.status !== 'abandoned')
+    .sort((a, b) => b.updated_at - a.updated_at)
+    .map(o => ({
+      session: sessionCache.get(o.id) ?? {
+        id: o.id,
+        name: o.objective,
+        status: mapStatus(o.status),
+        messages: [],
+      },
+      parents: [],
+    }));
+}
+
 export function toRecentWork(objectives: Objective[]): ObjectiveCardData[] {
   const topLevel = objectives
-    .filter(o => o.parent === 'root') // children of root only, exclude root itself
+    .filter(o => o.parent === 'root' && o.id !== 'quick') // children of root only, exclude root and quick
     .sort((a, b) => b.updated_at - a.updated_at);
 
   return topLevel.map(o => {

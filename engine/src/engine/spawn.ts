@@ -62,10 +62,10 @@ function formatMessages(
     .join("\n\n");
 }
 
-export async function spawnTurn(
+export function spawnTurn(
   db: Database.Database,
   objectiveId: string
-): Promise<void> {
+): void {
   // 1. Set status → 'thinking'
   updateStatus(db, objectiveId, "thinking");
 
@@ -107,6 +107,7 @@ export async function spawnTurn(
       "--output-format",
       "stream-json",
       "--verbose",
+      "--include-partial-messages",
       "--allowedTools",
       "Bash,Edit,Read,Write,Glob,Grep",
       "--model",
@@ -144,5 +145,5 @@ export async function spawnTurn(
   });
 
   // 9. Process output asynchronously
-  processOutput(proc, turn.id, objectiveId, db);
+  processOutput(proc, turn.id, objectiveId, db, cascadeId ?? undefined);
 }

@@ -12,7 +12,7 @@ const personaBrick: Brick = {
   type: "static",
   render(_ctx: BrickContext): BrickResult {
     const raw = readFileSync(join(__dirname, "persona.md"), "utf-8");
-    const content = `# PERSONA\n\n${raw}`;
+    const content = raw;
     return {
       name: "PERSONA",
       type: "static" as const,

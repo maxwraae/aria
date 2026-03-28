@@ -1,0 +1,9 @@
+# OBJECTIVE
+
+{{OBJECTIVE}}
+
+{{DESCRIPTION_SECTION}}
+
+## Status
+
+{{STATUS_LINE}}

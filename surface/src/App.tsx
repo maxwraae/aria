@@ -741,7 +741,7 @@ export default function App() {
   const [heroText, setHeroText] = useState("");
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
-  const [homeChat, setHomeChat] = useState(false);
+  const [homeChatId, setHomeChatId] = useState<string | null>(null);
   const [mobileChatId, setMobileChatId] = useState<string | null>(null);
   const [createParentId, setCreateParentId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -846,15 +846,18 @@ export default function App() {
     setSearchResults(matches);
   }, [heroText, aria.objectives]);
 
-  const handleHeroSubmit = useCallback(() => {
+  const handleHeroSubmit = useCallback(async () => {
     const trimmed = heroText.trim();
     if (!trimmed) return;
     setHeroText("");
     setSearchResults([]);
-    aria.loadConversation('quick');
-    aria.sendMessage('quick', trimmed);
-    setHomeChat(true);
-  }, [heroText, aria.loadConversation, aria.sendMessage]);
+    const newId = await aria.createObjective('quick', trimmed, trimmed);
+    if (newId) {
+      aria.loadConversation(newId);
+      aria.watchObjective(newId);
+      setHomeChatId(newId);
+    }
+  }, [heroText, aria.createObjective, aria.loadConversation]);
 
   const path = (effectiveCurrent && currentId)
     ? (findPathById(aria.tree, currentId) || [effectiveCurrent])
@@ -937,24 +940,24 @@ export default function App() {
             </View>
             )}
 
-            {homeChat ? (
+            {homeChatId ? (
               /* ── Home chat mode: hero area replaced by root ChatCard ── */
               isMobile ? (
                 /* Mobile: full-screen overlay */
                 <View style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 250, background: tod.gradient, animation: "chatFadeIn 250ms ease-out both", display: "flex", flexDirection: "column", paddingTop: "env(safe-area-inset-top, 12px)", paddingBottom: "env(safe-area-inset-bottom, 0px)" } as any}>
                   <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 8 } as any}>
                     <Pressable
-                      onPress={() => setHomeChat(false)}
+                      onPress={() => setHomeChatId(null)}
                       style={({ pressed }) => [{ padding: 8 } as any, pressed && { opacity: 0.5 }]}
                     >
                       <Text style={{ color: tod.textColor, fontSize: 18, fontFamily: theme.fonts.sans, fontWeight: "400" as const }}>{"\u2190"}</Text>
                     </Pressable>
                   </View>
                   <ChatCard
-                    session={aria.getSession('quick')}
+                    session={aria.getSession(homeChatId)}
                     scrollEnabled={true}
-                    onSend={(text) => aria.sendMessage('quick', text)}
-                    streamingText={aria.streamingText.get('quick')}
+                    onSend={(text) => aria.sendMessage(homeChatId, text)}
+                    streamingText={aria.streamingText.get(homeChatId)}
                     onSpeak={handleSpeak}
                     speakingMessageId={audioPlayer.speakingId}
                     titleColor={tod.textColor}
@@ -965,16 +968,16 @@ export default function App() {
                 /* Desktop: existing homeChatContainer */
                 <View style={styles.homeChatContainer as any}>
                   <Pressable
-                    onPress={() => setHomeChat(false)}
+                    onPress={() => setHomeChatId(null)}
                     style={({ pressed }) => [styles.homeChatDismiss as any, pressed && { opacity: 0.5 }]}
                   >
                     <Text style={{ color: tod.textColor, fontSize: 14, fontFamily: theme.fonts.sans, fontWeight: "400" as const }}>{"\u2190"}</Text>
                   </Pressable>
                   <ChatCard
-                    session={aria.getSession('quick')}
+                    session={aria.getSession(homeChatId)}
                     scrollEnabled={true}
-                    onSend={(text) => aria.sendMessage('quick', text)}
-                    streamingText={aria.streamingText.get('quick')}
+                    onSend={(text) => aria.sendMessage(homeChatId!, text)}
+                    streamingText={aria.streamingText.get(homeChatId!)}
                     onSpeak={handleSpeak}
                     speakingMessageId={audioPlayer.speakingId}
                     titleColor={tod.textColor}
@@ -1065,6 +1068,9 @@ export default function App() {
 
                 {/* Needs You strip — desktop only */}
                 {!isMobile && <NeedsYouStrip items={aria.needsYou} onNavigate={(id) => enterWorkView(id)} onExpand={enterNeedsYou} headerColor={tod.textColor} onSend={aria.sendMessage} streamingText={aria.streamingText} />}
+
+                {/* Quick strip — desktop only */}
+                {!isMobile && aria.quickItems.length > 0 && <NeedsYouStrip items={aria.quickItems} onNavigate={(id) => enterWorkView(id)} headerColor={tod.textColor} onSend={aria.sendMessage} streamingText={aria.streamingText} header="Quick" />}
 
                 {/* Projects — root-level objectives as grid tiles */}
                 {!isMobile && aria.tree && (

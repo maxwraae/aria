@@ -22,10 +22,12 @@ export function processOutput(
   proc: ChildProcess,
   turnId: string,
   objectiveId: string,
-  db: Database.Database
+  db: Database.Database,
+  cascadeId?: string,
 ): void {
   const tag = objectiveId.slice(0, 8);
   let lastAssistantText = "";
+  let streamedText = "";
   let buffer = "";
   // Capture last N stderr lines for diagnostics on silent failure
   const MAX_STDERR_LINES = 20;
@@ -64,7 +66,6 @@ export function processOutput(
           // Extract assistant text
           if (block.type === "text" && typeof block.text === "string") {
             lastAssistantText = block.text;
-            emit(objectiveId, block.text, false);
           }
 
           // Detect aria CLI calls inside Bash tool_use blocks
@@ -93,6 +94,20 @@ export function processOutput(
 
       case "result": {
         // Turn complete signal from the stream — finalize handled on 'close'
+        break;
+      }
+
+      case "stream_event": {
+        const event = frame.event as Record<string, unknown> | undefined;
+        if (!event) break;
+        const eventType = event.type as string | undefined;
+        if (eventType === "content_block_delta") {
+          const delta = event.delta as Record<string, unknown> | undefined;
+          if (delta?.type === "text_delta" && typeof delta.text === "string") {
+            streamedText += delta.text;
+            emit(objectiveId, streamedText, false);
+          }
+        }
         break;
       }
 
@@ -145,44 +160,50 @@ export function processOutput(
     const obj = getObjective(db, objectiveId);
     const currentStatus = obj?.status ?? "thinking";
 
-    // 2. If still 'thinking', fall back to 'needs-input' and record diagnostics
+    // 2. If still 'thinking', agent didn't change status itself — determine outcome
+    const hasOutput = !!(streamedText || lastAssistantText);
     if (currentStatus === "thinking") {
       updateStatus(db, objectiveId, "needs-input");
 
-      // Build error context: last assistant text + last stderr lines
-      const parts: string[] = [];
-      if (code !== 0 && code !== null) {
-        parts.push(`Exit code: ${code}`);
-      }
-      if (lastAssistantText) {
-        const snippet = lastAssistantText.slice(-500);
-        parts.push(`Last agent output:\n${snippet}`);
-      } else if (stderrLines.length > 0) {
-        parts.push(`Last stderr:\n${stderrLines.join("\n")}`);
+      if (hasOutput) {
+        // Normal turn — agent responded but didn't change status (the common case)
+        resetFailCount(db, objectiveId);
+        process.stderr.write(`[${tag}] Turn complete, status: needs-input\n`);
       } else {
-        parts.push("Agent exited without producing output or changing status.");
-      }
-      const errorContext = parts.join("\n\n");
-      updateLastError(db, objectiveId, errorContext);
+        // Actual failure — agent produced no output
+        const parts: string[] = [];
+        if (code !== 0 && code !== null) {
+          parts.push(`Exit code: ${code}`);
+        }
+        if (stderrLines.length > 0) {
+          parts.push(`Last stderr:\n${stderrLines.join("\n")}`);
+        } else {
+          parts.push("Agent exited without producing output or changing status.");
+        }
+        const errorContext = parts.join("\n\n");
+        updateLastError(db, objectiveId, errorContext);
 
-      process.stderr.write(
-        `[${tag}] Turn complete, status: needs-input (silent failure captured)\n`
-      );
+        process.stderr.write(
+          `[${tag}] Turn complete, status: needs-input (silent failure — no output)\n`
+        );
+      }
     } else {
-      // Successful turn — reset fail_count so circuit breaker tracks consecutive failures only
+      // Agent changed status itself (e.g. via aria CLI) — successful turn
       resetFailCount(db, objectiveId);
       process.stderr.write(
         `[${tag}] Turn complete, status: ${currentStatus}\n`
       );
     }
 
-    // 3. Store the assistant's response in the objective's own inbox
-    //    Stamp with turnId so it doesn't re-trigger the engine
-    if (lastAssistantText) {
-      const cascadeId = process.env.ARIA_CASCADE_ID || undefined;
+    // 3. Store the assistant's full output in the objective's own inbox
+    //    Uses streamedText (all text deltas) rather than lastAssistantText (last block only)
+    //    so intermediate text before tool calls is preserved.
+    const fullOutput = streamedText || lastAssistantText;
+    if (fullOutput) {
+
       const selfMsg = insertMessage(db, {
         objective_id: objectiveId,
-        message: lastAssistantText,
+        message: fullOutput,
         sender: objectiveId,
         type: "reply",
         cascade_id: cascadeId,
@@ -201,7 +222,7 @@ export function processOutput(
         if (senderObj) {
           insertMessage(db, {
             objective_id: sender,
-            message: lastAssistantText,
+            message: fullOutput,
             sender: objectiveId,
             type: "reply",
             cascade_id: cascadeId,
@@ -214,7 +235,7 @@ export function processOutput(
     emit(objectiveId, '', true);
 
     // 5. Push result to coordinator (worker mode only)
-    if (isWorker() && lastAssistantText) {
+    if (isWorker() && fullOutput) {
       const coordUrl = getCoordinatorUrl();
       if (coordUrl) {
         const finalStatus = obj?.status === 'thinking' ? 'needs-input' : (obj?.status ?? 'needs-input');
@@ -224,7 +245,7 @@ export function processOutput(
           body: JSON.stringify({
             objectiveId,
             status: finalStatus,
-            lastAssistantText,
+            lastAssistantText: fullOutput,
             sessionId: null, // already set during stream
           }),
         }).then(res => {
