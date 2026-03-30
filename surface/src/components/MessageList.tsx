@@ -10,6 +10,7 @@ interface MessageListProps {
   messages: ChatMessage[];
   scrollEnabled?: boolean;
   bottomPad?: number;
+  topPad?: number;
   onSpeak?: (text: string) => void;
   speakingMessageId?: string | null;
 }
@@ -40,7 +41,7 @@ function AnimatedMessageRow({ children, style }: { children: ReactNode; style?: 
   );
 }
 
-export function MessageList({ messages, scrollEnabled = true, bottomPad = 120, onSpeak, speakingMessageId }: MessageListProps) {
+export function MessageList({ messages, scrollEnabled = true, bottomPad = 120, topPad = 8, onSpeak, speakingMessageId }: MessageListProps) {
 
   function renderMessage(item: ChatMessage) {
     switch (item.kind) {
@@ -52,6 +53,7 @@ export function MessageList({ messages, scrollEnabled = true, bottomPad = 120, o
             id={item.id}
             text={item.text}
             whisper={item.whisper}
+            sender={item.sender}
             onSpeak={onSpeak}
             isSpeaking={speakingMessageId === item.id}
           />
@@ -109,7 +111,7 @@ export function MessageList({ messages, scrollEnabled = true, bottomPad = 120, o
     <ScrollView
       ref={scrollRef}
       style={styles.list}
-      contentContainerStyle={[styles.content, { paddingBottom: bottomPad }]}
+      contentContainerStyle={[styles.content, { paddingBottom: bottomPad, paddingTop: topPad }]}
       scrollEnabled={scrollEnabled}
       showsVerticalScrollIndicator={false}
     >

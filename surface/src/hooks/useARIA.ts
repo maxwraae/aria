@@ -63,6 +63,8 @@ export function useARIA(): UseARIAReturn {
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const objectivesRef = useRef<Objective[]>([]);
   const ttsCallbackRef = useRef<((msg: TTSMessage) => void) | null>(null);
+  const loadConversationRef = useRef<(id: string) => Promise<void>>();
+  const watchedRef = useRef<Set<string>>(new Set());
 
   // Keep objectivesRef in sync
   useEffect(() => {
@@ -99,16 +101,32 @@ export function useARIA(): UseARIAReturn {
           const msg = JSON.parse(event.data);
           if (msg.type === 'tree_snapshot') {
             processTree(msg.tree);
-          } else if (msg.type === 'turn_stream') {
-            setStreamingText(prev => {
-              const next = new Map(prev);
-              if (msg.done) {
-                next.delete(msg.objectiveId);
-              } else {
-                next.set(msg.objectiveId, msg.text);
+            // Auto-subscribe to all thinking objectives for streaming
+            for (const obj of msg.tree) {
+              if (obj.status === 'thinking' && !watchedRef.current.has(obj.id)) {
+                watchedRef.current.add(obj.id);
+                ws.send(JSON.stringify({ type: 'watch_objective', objectiveId: obj.id }));
               }
-              return next;
-            });
+            }
+          } else if (msg.type === 'turn_stream') {
+            if (msg.done) {
+              // Clean up subscription tracking
+              watchedRef.current.delete(msg.objectiveId);
+              // Reload conversation first, then clear streaming text
+              loadConversationRef.current?.(msg.objectiveId).then(() => {
+                setStreamingText(prev => {
+                  const next = new Map(prev);
+                  next.delete(msg.objectiveId);
+                  return next;
+                });
+              });
+            } else {
+              setStreamingText(prev => {
+                const next = new Map(prev);
+                next.set(msg.objectiveId, msg.text);
+                return next;
+              });
+            }
           } else if (msg.type === 'tts_audio' || msg.type === 'tts_error') {
             console.log('[TTS] ws received:', msg.type, 'callback:', !!ttsCallbackRef.current);
             ttsCallbackRef.current?.(msg);
@@ -121,6 +139,7 @@ export function useARIA(): UseARIAReturn {
       ws.onclose = () => {
         setConnected(false);
         wsRef.current = null;
+        watchedRef.current.clear(); // Re-subscribe on reconnect
         if (alive) {
           reconnectRef.current = setTimeout(connect, 2000);
         }
@@ -158,6 +177,9 @@ export function useARIA(): UseARIAReturn {
     }
   }, []);
 
+  // Keep ref in sync so WS handler can call loadConversation
+  useEffect(() => { loadConversationRef.current = loadConversation; }, [loadConversation]);
+
   const getSession = useCallback((id: string): ChatSession => {
     const obj = objectivesRef.current.find(o => o.id === id);
     const status = obj ? (obj.status === 'abandoned' ? 'failed' : obj.status as any) : 'idle';
@@ -171,8 +193,10 @@ export function useARIA(): UseARIAReturn {
   }, []);
 
   const watchObjective = useCallback((objectiveId: string) => {
+    if (watchedRef.current.has(objectiveId)) return;
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
+      watchedRef.current.add(objectiveId);
       ws.send(JSON.stringify({ type: 'watch_objective', objectiveId }));
     }
   }, []);

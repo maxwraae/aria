@@ -42,7 +42,8 @@ export function GlassPill({ children, style, height = 36, tint }: GlassPillProps
 const pillStyles = StyleSheet.create({
   shadow: {
     ...GLASS.shadow,
-  },
+    ...(Platform.OS === "web" ? { boxShadow: "0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.06)" } : {}),
+  } as any,
   core: {
     overflow: "hidden",
     backgroundColor: GLASS.bg,
@@ -107,7 +108,8 @@ export function GlassButton({
 const buttonStyles = StyleSheet.create({
   shadow: {
     ...GLASS.shadow,
-  },
+    ...(Platform.OS === "web" ? { boxShadow: "0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.06)" } : {}),
+  } as any,
   core: {
     overflow: "hidden",
     backgroundColor: GLASS.bg,
