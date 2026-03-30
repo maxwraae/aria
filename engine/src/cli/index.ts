@@ -6,6 +6,7 @@ import { generateId } from '../db/utils.js';
 import { startEngine } from '../engine/loop.js';
 import { startServer } from '../server/index.js';
 import { isDeepWork } from '../engine/concurrency.js';
+import { initPush, sendPushToAll } from '../server/push.js';
 import { validateCreate, validateSucceed, validateFail, validateReject, validateWait, validateTell, validateNotify } from '../commands/registry.js';
 import type { Objective, InboxMessage } from '../db/queries.js';
 import { parseInterval } from './parse-interval.js';
@@ -674,6 +675,14 @@ function cmdNotify(rawArgs: string[]): void {
     child.unref();
   } catch {
     // terminal-notifier not available — silently ignore
+  }
+
+  // Web push notification — fire-and-forget alongside terminal-notifier
+  try {
+    initPush(db);
+    sendPushToAll(db, { message: message!, sender: process.env.ARIA_OBJECTIVE_ID, important, urgent });
+  } catch {
+    // push not available
   }
 
   db.close();

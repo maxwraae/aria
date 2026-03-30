@@ -26,6 +26,7 @@ import {
 import { subscribe, unsubscribe, type StreamCallback } from '../engine/streams.js';
 import { generateId } from '../db/utils.js';
 import { getTTS } from './tts.js';
+import { initPush, saveSubscription, removeSubscription, sendPushToAll } from './push.js';
 
 // ── MIME types for static serving ─────────────────────────────────
 
@@ -85,6 +86,8 @@ export function startServer(
   port: number = 8080,
   nudge?: () => void,
 ): http.Server {
+  const vapidPublicKey = initPush(db);
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const pathname = url.pathname;
@@ -176,7 +179,7 @@ export function startServer(
           objective,
           description: (body.description as string) ?? undefined,
           parent: (body.parent as string) ?? undefined,
-          model: (body.model as string) ?? undefined,
+          model: (body.model as string) ?? ((body.parent as string) === 'quick' ? 'opus' : undefined),
           machine: inheritedMachine,
         });
         // If instructions provided, send as first message
@@ -234,6 +237,7 @@ export function startServer(
           const newObj = createObjective(db, {
             objective: message,
             parent: 'quick',
+            model: 'opus',
           });
           insertMessage(db, {
             objective_id: newObj.id,
@@ -459,8 +463,52 @@ export function startServer(
           type: 'signal',
         });
 
+        // Web push — suppress non-urgent during deep work
+        try {
+          const { isDeepWork } = await import('../engine/concurrency.js');
+          if (!isDeepWork(db) || urgent) {
+            sendPushToAll(db, { message, sender, important, urgent });
+          }
+        } catch {}
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, message, important, urgent }));
+        return;
+      }
+
+      // GET /api/push/vapid-key
+      if (method === 'GET' && pathname === '/api/push/vapid-key') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ publicKey: vapidPublicKey }));
+        return;
+      }
+
+      // POST /api/push/subscribe
+      if (method === 'POST' && pathname === '/api/push/subscribe') {
+        const body = await parseBody(req);
+        const sub = body.subscription as any;
+        if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'subscription with endpoint and keys required' }));
+          return;
+        }
+        saveSubscription(db, sub, body.label as string | undefined);
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      // POST /api/push/unsubscribe
+      if (method === 'POST' && pathname === '/api/push/unsubscribe') {
+        const body = await parseBody(req);
+        if (!body.endpoint) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'endpoint required' }));
+          return;
+        }
+        removeSubscription(db, body.endpoint as string);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
         return;
       }
 

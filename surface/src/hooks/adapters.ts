@@ -152,7 +152,15 @@ function isImageFile(filename: string): boolean {
   return IMAGE_EXTENSIONS.includes(ext);
 }
 
-export function toMessages(messages: InboxMessage[]): ChatMessage[] {
+export function toMessages(messages: InboxMessage[], objectives?: Objective[], selfId?: string): ChatMessage[] {
+  // Build a lookup map from objective ID → objective text (display name)
+  const nameById = new Map<string, string>();
+  if (objectives) {
+    for (const o of objectives) {
+      nameById.set(o.id, o.objective);
+    }
+  }
+
   return messages.flatMap(m => {
     if (m.sender === 'max') {
       const match = ATTACHMENT_REGEX.exec(m.message);
@@ -209,21 +217,28 @@ export function toMessages(messages: InboxMessage[]): ChatMessage[] {
         timestamp: m.created_at * 1000,
       }];
     }
+    // Skip self — the objective's own replies shouldn't get a child label
+    if (m.sender === selfId) {
+      return [{ id: m.id, kind: 'agent' as const, text: m.message, timestamp: m.created_at * 1000 }];
+    }
+    // This message is from a child objective — resolve its display name
+    const senderName = nameById.get(m.sender) ?? undefined;
     return [{
       id: m.id,
       kind: 'agent' as const,
       text: m.message,
+      sender: senderName,
       timestamp: m.created_at * 1000,
     }];
   });
 }
 
-export function toSession(obj: Objective, messages: InboxMessage[]): ChatSession {
+export function toSession(obj: Objective, messages: InboxMessage[], objectives?: Objective[]): ChatSession {
   return {
     id: obj.id,
     name: obj.objective,
     status: mapStatus(obj.status),
     model: obj.model,
-    messages: toMessages(messages),
+    messages: toMessages(messages, objectives, obj.id),
   };
 }

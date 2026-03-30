@@ -9,6 +9,7 @@ import { theme } from "./constants/theme";
 import { FocusProvider, useFocus } from "./context/FocusContext";
 import { useARIA } from "./hooks/useARIA";
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
+import { usePushSubscription } from "./hooks/usePushSubscription";
 import type { ObjectiveNode } from "./hooks/adapters";
 import { CreateIcon, PlusIcon, PATHS } from "./components/Icons";
 
@@ -53,6 +54,14 @@ const BREATHE_CSS = `
   0%   { background-color: var(--card-breathe-on); }
   100% { background-color: var(--card-breathe-off); }
 }
+@keyframes headerBreathe {
+  0%, 100% { filter: brightness(1.0) saturate(1.0); }
+  50%      { filter: brightness(0.97) saturate(1.3); }
+}
+@keyframes headerSettle {
+  0%   { filter: brightness(0.97) saturate(1.3); }
+  100% { filter: brightness(1.0) saturate(1.0); }
+}
 @keyframes heroFadeOut {
   from { opacity: 1; transform: translateY(0); }
   to   { opacity: 0; transform: translateY(-12px); }
@@ -88,17 +97,19 @@ function useTimeOfDay() {
   const textColor = `hsl(${colors.top[0]}, ${Math.min(colors.top[1] + 12, 40)}%, 45%)`;
   const textColorMuted = `hsl(${colors.top[0]}, ${Math.min(colors.top[1] + 8, 30)}%, 58%)`;
   const buttonColor = `hsl(${colors.top[0]}, ${Math.min(colors.top[1] + 10, 35)}%, 55%)`;
+  // Card surface — faintest echo of the sky hue on white
+  const cardBg = `hsl(${colors.top[0]}, ${Math.min(colors.top[1], 14)}%, 98%)`;
 
   // Card breathing uses the same hue as the background, more saturated and concentrated
   useEffect(() => {
     if (Platform.OS !== "web") return;
     const [h, s] = colors.top;
-    const sat = Math.min(s + 30, 60);
+    const sat = Math.min(s + 12, 35);
     document.documentElement.style.setProperty("--card-breathe-off", `hsla(${h}, ${sat}%, 52%, 0.00)`);
-    document.documentElement.style.setProperty("--card-breathe-on", `hsla(${h}, ${sat}%, 52%, 0.22)`);
+    document.documentElement.style.setProperty("--card-breathe-on", `hsla(${h}, ${sat}%, 52%, 0.07)`);
   }, [period]);
 
-  return { gradient, period, textColor, textColorMuted, buttonColor };
+  return { gradient, period, textColor, textColorMuted, buttonColor, cardBg };
 }
 
 function useClock() {
@@ -573,7 +584,7 @@ function ResolveObjectiveOverlay({ onSucceed, onDismiss }: { onSucceed: (text: s
   );
 }
 
-function FocusOverlay({ onSend, streamingText, onSpeak, speakingMessageId, titleColor }: { onSend: (id: string, text: string) => Promise<void>; streamingText: Map<string, string>; onSpeak?: (text: string) => void; speakingMessageId?: string | null; titleColor?: string }) {
+function FocusOverlay({ onSend, onUpload, streamingText, onSpeak, speakingMessageId, titleColor, cardBg }: { onSend: (id: string, text: string) => Promise<void>; onUpload: (id: string, file: File) => Promise<void>; streamingText: Map<string, string>; onSpeak?: (text: string) => void; speakingMessageId?: string | null; titleColor?: string; cardBg?: string }) {
   const { focusedSession, dismissFocus } = useFocus();
   if (!focusedSession || Platform.OS !== "web") return null;
   return (
@@ -611,6 +622,8 @@ function FocusOverlay({ onSend, streamingText, onSpeak, speakingMessageId, title
           onSpeak={onSpeak}
           speakingMessageId={speakingMessageId}
           titleColor={titleColor}
+          cardBg={cardBg}
+          onUpload={async (file) => onUpload(focusedSession.id, file)}
           style={{
             flex: 1,
             width: "100%",
@@ -631,6 +644,7 @@ export default function App() {
   const tod = useTimeOfDay();
   const clock = useClock();
   useFavicon();
+  usePushSubscription();
   // URL routing: read initial state from path
   const [view, setView] = useState<"home" | "work" | "needs-you">(() => {
     if (typeof window === 'undefined') return "home";
@@ -865,6 +879,14 @@ export default function App() {
   const ancestors = path.slice(0, -1);
   const children = effectiveCurrent?.children || [];
 
+  // Preload conversations for children of the current objective
+  useEffect(() => {
+    for (const child of children) {
+      aria.loadConversation(child.id);
+      aria.watchObjective(child.id);
+    }
+  }, [children.map(c => c.id).join(',')]);
+
   const goHome = useCallback(() => {
     Animated.parallel([
       Animated.timing(fadeAnim, { toValue: 0, duration: 120, useNativeDriver: true }),
@@ -960,7 +982,13 @@ export default function App() {
                     streamingText={aria.streamingText.get(homeChatId)}
                     onSpeak={handleSpeak}
                     speakingMessageId={audioPlayer.speakingId}
-                    titleColor={tod.textColor}
+                    titleColor={tod.textColor} cardBg={tod.cardBg}
+                    onUpload={async (file) => {
+                      const filename = await aria.uploadFile(file);
+                      if (filename) {
+                        await aria.sendMessage(homeChatId, `[attachment:${filename}]`);
+                      }
+                    }}
                     style={{ flex: 1, width: "100%", maxWidth: "none", maxHeight: "none", borderRadius: 0 } as any}
                   />
                 </View>
@@ -980,7 +1008,13 @@ export default function App() {
                     streamingText={aria.streamingText.get(homeChatId!)}
                     onSpeak={handleSpeak}
                     speakingMessageId={audioPlayer.speakingId}
-                    titleColor={tod.textColor}
+                    titleColor={tod.textColor} cardBg={tod.cardBg}
+                    onUpload={async (file) => {
+                      const filename = await aria.uploadFile(file);
+                      if (filename) {
+                        await aria.sendMessage(homeChatId!, `[attachment:${filename}]`);
+                      }
+                    }}
                     style={{ flex: 1, maxWidth: 640, width: "100%" } as any}
                   />
                 </View>
@@ -1070,7 +1104,7 @@ export default function App() {
                 {!isMobile && <NeedsYouStrip items={aria.needsYou} onNavigate={(id) => enterWorkView(id)} onExpand={enterNeedsYou} headerColor={tod.textColor} onSend={aria.sendMessage} streamingText={aria.streamingText} />}
 
                 {/* Quick strip — desktop only */}
-                {!isMobile && aria.quickItems.length > 0 && <NeedsYouStrip items={aria.quickItems} onNavigate={(id) => enterWorkView(id)} headerColor={tod.textColor} onSend={aria.sendMessage} streamingText={aria.streamingText} header="Quick" />}
+                {!isMobile && aria.quickItems.length > 0 && <NeedsYouStrip items={aria.quickItems} onNavigate={(id) => enterWorkView(id)} onExpand={() => enterWorkView('quick')} headerColor={tod.textColor} onSend={aria.sendMessage} streamingText={aria.streamingText} header="Quick" />}
 
                 {/* Projects — root-level objectives as grid tiles */}
                 {!isMobile && aria.tree && (
@@ -1190,7 +1224,13 @@ export default function App() {
                   streamingText={aria.streamingText.get(mobileChatId)}
                   onSpeak={handleSpeak}
                   speakingMessageId={audioPlayer.speakingId}
-                  titleColor={tod.textColor}
+                  titleColor={tod.textColor} cardBg={tod.cardBg}
+                  onUpload={async (file) => {
+                    const filename = await aria.uploadFile(file);
+                    if (filename) {
+                      await aria.sendMessage(mobileChatId, `[attachment:${filename}]`);
+                    }
+                  }}
                   style={{ flex: 1, width: "100%", maxWidth: "none", maxHeight: "none", borderRadius: 0 } as any}
                 />
               </View>
@@ -1247,7 +1287,7 @@ export default function App() {
                       onSetModel={(m) => aria.updateObjective(item.session.id, { model: m })}
                       onSpeak={handleSpeak}
                       speakingMessageId={audioPlayer.speakingId}
-                      titleColor={tod.textColor}
+                      titleColor={tod.textColor} cardBg={tod.cardBg}
                       onUpload={async (file) => {
                         const filename = await aria.uploadFile(file);
                         if (filename) {
@@ -1357,7 +1397,7 @@ export default function App() {
                       onSetModel={(m) => aria.updateObjective(child.id, { model: m })}
                       onSpeak={handleSpeak}
                       speakingMessageId={audioPlayer.speakingId}
-                      titleColor={tod.textColor}
+                      titleColor={tod.textColor} cardBg={tod.cardBg}
                       onUpload={async (file) => {
                         const filename = await aria.uploadFile(file);
                         if (filename) {
@@ -1372,7 +1412,7 @@ export default function App() {
 
           </View>
         )}
-        <FocusOverlay onSend={aria.sendMessage} streamingText={aria.streamingText} onSpeak={handleSpeak} speakingMessageId={audioPlayer.speakingId} titleColor={tod.textColor} />
+        <FocusOverlay onSend={aria.sendMessage} onUpload={async (id, file) => { const filename = await aria.uploadFile(file); if (filename) { await aria.sendMessage(id, `[attachment:${filename}]`); } }} streamingText={aria.streamingText} onSpeak={handleSpeak} speakingMessageId={audioPlayer.speakingId} titleColor={tod.textColor} cardBg={tod.cardBg} />
         {createParentId && (
           <CreateObjectiveOverlay
             parentId={createParentId}

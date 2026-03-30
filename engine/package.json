@@ -15,11 +15,13 @@
     "better-sqlite3": "^11.0.0",
     "sherpa-onnx-darwin-arm64": "^1.12.29",
     "sherpa-onnx-node": "^1.12.29",
+    "web-push": "^3.6.7",
     "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.0.0",
     "@types/node": "^22.0.0",
+    "@types/web-push": "^3.6.4",
     "@types/ws": "^8.18.1",
     "playwright": "^1.58.2",
     "tsx": "^4.0.0",

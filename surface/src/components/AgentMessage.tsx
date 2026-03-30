@@ -7,6 +7,7 @@ interface AgentMessageProps {
   id?: string;
   text: string;
   whisper?: string;
+  sender?: string;
   onSpeak?: (text: string) => void;
   isSpeaking?: boolean;
 }
@@ -106,12 +107,31 @@ const markdownStyles = StyleSheet.create({
 
 const markdownRules = {};
 
-export function AgentMessage({ id, text, whisper, onSpeak, isSpeaking }: AgentMessageProps) {
+/** Truncate markdown to roughly N lines worth of text */
+function truncateMarkdown(text: string, maxChars = 200): string {
+  if (text.length <= maxChars) return text;
+  // Cut at a word boundary near maxChars
+  const cut = text.lastIndexOf(' ', maxChars);
+  return text.slice(0, cut > 0 ? cut : maxChars) + '…';
+}
+
+export function AgentMessage({ id, text, whisper, sender, onSpeak, isSpeaking }: AgentMessageProps) {
+  const isChild = Boolean(sender);
+  const needsTruncation = isChild && text.length > 200;
+  const [expanded, setExpanded] = useState(false);
+  const displayText = (isChild && !expanded && needsTruncation) ? truncateMarkdown(text) : text;
+
   return (
     <View style={styles.container}>
+      {sender ? <Text style={styles.senderLabel}>{sender}</Text> : null}
       <Markdown style={markdownStyles} rules={markdownRules}>
-        {text}
+        {displayText}
       </Markdown>
+      {needsTruncation && (
+        <Pressable onPress={() => setExpanded(v => !v)} style={({ pressed }) => [pressed && { opacity: 0.5 }]}>
+          <Text style={styles.moreLabel}>{expanded ? 'less' : 'more'}</Text>
+        </Pressable>
+      )}
       <View style={styles.footer}>
         {whisper ? (
           <Whisper text={whisper} />
@@ -157,6 +177,21 @@ function Whisper({ text }: { text: string }) {
 const styles = StyleSheet.create({
   container: {
     marginVertical: 4,
+  },
+  senderLabel: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: "rgba(0,0,0,0.32)",
+    marginBottom: 3,
+    letterSpacing: 0.2,
+  },
+  moreLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "rgba(0,0,0,0.30)",
+    fontFamily: theme.fonts.sans,
+    marginTop: -8,
+    marginBottom: 4,
   },
   footer: {
     flexDirection: "row",

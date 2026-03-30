@@ -13,6 +13,8 @@ export interface AgentMessage {
   text: string;
   /** Inline trace summary, rendered as muted text at the end of the last prose line. */
   whisper?: string;
+  /** Display name of the sending child objective, if this message came from a child agent. */
+  sender?: string;
   timestamp: number;
 }
 

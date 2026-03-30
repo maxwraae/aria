@@ -118,6 +118,15 @@ export function initDb(dbPath?: string): Database.Database {
       created_at INTEGER,
       FOREIGN KEY (objective_id) REFERENCES objectives(id)
     );
+
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id TEXT PRIMARY KEY,
+      endpoint TEXT NOT NULL UNIQUE,
+      keys_p256dh TEXT NOT NULL,
+      keys_auth TEXT NOT NULL,
+      label TEXT,
+      created_at INTEGER NOT NULL
+    );
   `);
 
   // Migration: add processed_by column to inbox if missing

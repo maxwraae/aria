@@ -73,11 +73,13 @@ interface ChatCardProps {
   speakingMessageId?: string | null;
   /** Dynamic time-of-day color for the objective title */
   titleColor?: string;
+  /** Dynamic time-of-day card background */
+  cardBg?: string;
   /** Called when user picks a file to upload */
   onUpload?: (file: File) => Promise<void>;
 }
 
-export function ChatCard({ session, focused = false, style, onDescend, onResolve, onAddChild, onRename, childCount = 0, resolvedCount = 0, scrollEnabled = true, urgent, important, onSend, streamingText, machine, onSetMachine, onSetModel, onSpeak, speakingMessageId, titleColor, onUpload }: ChatCardProps) {
+export function ChatCard({ session, focused = false, style, onDescend, onResolve, onAddChild, onRename, childCount = 0, resolvedCount = 0, scrollEnabled = true, urgent, important, onSend, streamingText, machine, onSetMachine, onSetModel, onSpeak, speakingMessageId, titleColor, cardBg, onUpload }: ChatCardProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(session.messages);
 
   // Sync messages when the parent refreshes session.messages (e.g. after API reply loads)
@@ -87,8 +89,10 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
   const [text, setText] = useState("");
   const [inputHeight, setInputHeight] = useState(20);
   const cardRef = useRef<View>(null);
+  const inputRef = useRef<TextInput>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
 
@@ -151,6 +155,52 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
     return () => el.removeEventListener("wheel", handler);
   }, []);
 
+  // Native drag-and-drop — RNW's View strips drag events, so attach directly to DOM
+  const dragCountRef = useRef(0);
+  const onUploadRef = useRef(onUpload);
+  onUploadRef.current = onUpload;
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !cardRef.current) return;
+    const el = cardRef.current as unknown as HTMLElement;
+
+    const onDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCountRef.current++;
+      if (dragCountRef.current === 1) setIsDragOver(true);
+    };
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const onDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCountRef.current--;
+      if (dragCountRef.current <= 0) { dragCountRef.current = 0; setIsDragOver(false); }
+    };
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCountRef.current = 0;
+      setIsDragOver(false);
+      const file = e.dataTransfer?.files?.[0];
+      if (file && onUploadRef.current) onUploadRef.current(file);
+    };
+
+    el.addEventListener("dragenter", onDragEnter);
+    el.addEventListener("dragover", onDragOver);
+    el.addEventListener("dragleave", onDragLeave);
+    el.addEventListener("drop", onDrop);
+    return () => {
+      el.removeEventListener("dragenter", onDragEnter);
+      el.removeEventListener("dragover", onDragOver);
+      el.removeEventListener("dragleave", onDragLeave);
+      el.removeEventListener("drop", onDrop);
+    };
+  }, []);
+
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -205,13 +255,6 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
     headerTint = theme.status.idle.tint;
   }
 
-  // Breathing animation for thinking status only
-  const headerBreathStyle = Platform.OS === "web" && isThinking
-    ? (isStreaming
-        ? { animation: "cardSettle 2s ease-out forwards" }
-        : { animation: "cardBreathe 3.5s ease-in-out infinite" })
-    : {};
-
   const handleHeaderPress = () => {
     if (editing) return;
     if (onDescend) onDescend();
@@ -220,6 +263,7 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
   return (
     <View ref={cardRef} style={[
       styles.container,
+      cardBg ? { backgroundColor: cardBg } : undefined,
       focused ? styles.containerFocused : styles.containerUnfocused,
       session.status === "resolved" && { opacity: 0.45 },
       !scrollEnabled && Platform.OS === "web" && { overscrollBehavior: "auto" } as any,
@@ -232,18 +276,55 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
       style,
     ]}
     {...(Platform.OS === "web" ? {
-      onDragOver: (e: any) => { e.preventDefault(); },
-      onDrop: (e: any) => {
-        e.preventDefault();
-        const file = e.dataTransfer?.files?.[0];
-        if (file && onUpload) onUpload(file);
+      onMouseEnter: () => {
+        const node = (inputRef.current as any)?._node ?? inputRef.current;
+        if (node instanceof HTMLElement) node.focus({ preventScroll: true });
       },
+      onMouseLeave: () => { inputRef.current?.blur(); },
     } : {})}
     >
-      {/* Header — entire bar is clickable */}
+      {/* Drag-over overlay */}
+      {Platform.OS === "web" && isDragOver && (
+        <View style={{
+          ...StyleSheet.absoluteFillObject,
+          zIndex: 50,
+          borderRadius: 20,
+          backgroundColor: 'rgba(0,0,0,0.04)',
+          borderWidth: 2,
+          borderColor: 'rgba(0,0,0,0.12)',
+          borderStyle: 'dashed',
+          alignItems: 'center',
+          justifyContent: 'center',
+          pointerEvents: 'none',
+        } as any}>
+          <Text style={{ fontSize: 13, color: 'rgba(0,0,0,0.30)', fontFamily: theme.fonts.sans }}>Drop file</Text>
+        </View>
+      )}
+
+      {/* Breathing overlay — whole card pulses when thinking */}
+      {Platform.OS === "web" && isThinking && (
+        <View style={{
+          ...StyleSheet.absoluteFillObject,
+          zIndex: 0,
+          borderRadius: 20,
+          pointerEvents: "none",
+          animation: isStreaming
+            ? "cardSettle 2s ease-out forwards"
+            : "cardBreathe 3.5s ease-in-out infinite",
+        } as any} />
+      )}
+
+      {/* Header — floating gradient overlay */}
       <Pressable
         onPress={handleHeaderPress}
-        style={[styles.header, { backgroundColor: headerTint || "rgba(0,0,0,0.03)" }, Platform.OS === "web" ? { cursor: onDescend ? "pointer" : "default", ...headerBreathStyle } as any : undefined]}
+        style={[
+          styles.header,
+          Platform.OS === "web" ? {
+            cursor: onDescend ? "pointer" : "default",
+            background: 'linear-gradient(to bottom, rgba(255,255,255,1) 0%, rgba(255,255,255,0.98) 50%, rgba(255,255,255,0) 100%)',
+            transition: 'background 0.3s ease',
+          } as any : undefined,
+        ]}
         {...(Platform.OS === "web" ? {
           onMouseEnter: () => setHeaderHovered(true),
           onMouseLeave: () => setHeaderHovered(false),
@@ -283,46 +364,48 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
           </Text>
         )}
         <View style={{ flex: 1 }} />
-        {session.model && onSetModel ? (
-          <Pressable
-            onPress={() => {
-              onSetModel(session.model === 'haiku' ? 'sonnet' : 'haiku');
-            }}
-            style={[Platform.OS === 'web' ? { cursor: 'pointer' } as any : undefined]}
+        {/* Controls — fade in on hover */}
+        <View style={Platform.OS === "web" ? {
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 8,
+          opacity: headerHovered ? 1 : 0,
+          transition: 'opacity 0.2s ease',
+        } as any : { flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {session.model && onSetModel ? (
+            <GlassButton size={32} onPress={() => {
+              const next: Record<string, string> = { opus: 'sonnet', sonnet: 'haiku', haiku: 'opus' };
+              onSetModel(next[session.model ?? 'sonnet'] ?? 'sonnet');
+            }}>
+              <Text style={styles.badgeText}>{({ opus: 'O', sonnet: 'S', haiku: 'H' } as Record<string, string>)[session.model ?? 'sonnet'] ?? 'S'}</Text>
+            </GlassButton>
+          ) : session.model ? (
+            <GlassButton size={32}>
+              <Text style={styles.badgeText}>{({ opus: 'O', sonnet: 'S', haiku: 'H' } as Record<string, string>)[session.model ?? 'sonnet'] ?? 'S'}</Text>
+            </GlassButton>
+          ) : null}
+          {onSetMachine && (
+            <GlassButton size={32} onPress={() => onSetMachine(machine === 'macbook' ? null : 'macbook')}>
+              <Text style={[styles.badgeText, machine === 'macbook' && { color: 'rgba(0,0,0,0.55)' }]}>
+                {machine === 'macbook' ? 'MB' : 'Auto'}
+              </Text>
+            </GlassButton>
+          )}
+          <GlassButton
+            size={32}
+            onPress={isFocused ? dismissFocus : () => focusCard(session.id, session)}
           >
-            <Text style={styles.modelBadge}>
-              {session.model === 'haiku' ? 'H' : 'O'}
-            </Text>
-          </Pressable>
-        ) : session.model ? (
-          <Text style={styles.modelBadge}>
-            {session.model === 'haiku' ? 'H' : 'O'}
-          </Text>
-        ) : null}
-        {onSetMachine && (
-          <Pressable
-            onPress={() => onSetMachine(machine === 'macbook' ? null : 'macbook')}
-            style={[styles.machineToggle, Platform.OS === 'web' ? { cursor: 'pointer' } as any : undefined]}
-          >
-            <Text style={[styles.machineBadge, machine === 'macbook' && styles.machineBadgeActive]}>
-              {machine === 'macbook' ? 'MB' : 'Auto'}
-            </Text>
-          </Pressable>
-        )}
-        <GlassButton
-          size={32}
-          onPress={isFocused ? dismissFocus : () => focusCard(session.id, session)}
-        >
-          <Text style={styles.focusIcon}>{isFocused ? "\u2715" : "\u2197"}</Text>
-        </GlassButton>
-        <GlassButton size={32} onPress={onResolve}>
-          <Text style={styles.checkIcon}>{"\u2713"}</Text>
-        </GlassButton>
-        {onAddChild && (
-          <GlassButton size={32} onPress={onAddChild}>
-            <PlusIcon size={14} color="rgba(0,0,0,0.45)" />
+            <Text style={styles.focusIcon}>{isFocused ? "\u2715" : "\u2197"}</Text>
           </GlassButton>
-        )}
+          <GlassButton size={32} onPress={onResolve}>
+            <Text style={styles.checkIcon}>{"\u2713"}</Text>
+          </GlassButton>
+          {onAddChild && (
+            <GlassButton size={32} onPress={onAddChild}>
+              <PlusIcon size={14} color="rgba(0,0,0,0.45)" />
+            </GlassButton>
+          )}
+        </View>
       </Pressable>
 
       <MessageList
@@ -334,29 +417,26 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
         scrollEnabled={scrollEnabled}
         onSpeak={onSpeak}
         speakingMessageId={speakingMessageId}
+        topPad={56}
       />
 
       {/* Card input bar */}
       {session.status !== "resolved" && <View style={styles.inputArea}>
         <View style={styles.inputRow}>
           {Platform.OS === 'web' && onUpload && (
-            <>
-              <input
-                ref={fileInputRef as any}
-                type="file"
-                style={{ position: 'absolute', width: 0, height: 0, opacity: 0 }}
-                onChange={(e: any) => {
-                  const file = e.target?.files?.[0];
-                  if (file) onUpload(file);
-                  if (fileInputRef.current) fileInputRef.current.value = '';
-                }}
-              />
-              <GlassButton size={28} onPress={() => (fileInputRef.current as any)?.click()}>
-                <Text style={{ fontSize: 14, color: 'rgba(0,0,0,0.35)' }}>+</Text>
-              </GlassButton>
-            </>
+            <input
+              ref={fileInputRef as any}
+              type="file"
+              style={{ position: 'absolute', width: 0, height: 0, opacity: 0 }}
+              onChange={(e: any) => {
+                const file = e.target?.files?.[0];
+                if (file) onUpload(file);
+                if (fileInputRef.current) fileInputRef.current.value = '';
+              }}
+            />
           )}
           <TextInput
+            ref={inputRef}
             style={[styles.input, { height: inputHeight }]}
             value={text}
             onChangeText={setText}
@@ -390,10 +470,12 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     ...(Platform.OS === "web"
       ? {
-          height: "calc(100vh - 240px)",
+          height: "clamp(280px, calc(100vh - 280px), 900px)",
           display: "flex",
           flexDirection: "column",
           overscrollBehavior: "contain",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.03)",
+          transition: "background-color 0.5s ease, box-shadow 0.3s ease",
         }
       : {
           flex: 1,
@@ -402,11 +484,19 @@ const styles = StyleSheet.create({
   containerFocused: {} as any,
   containerUnfocused: {} as any,
   header: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 20,
     paddingVertical: 14,
     gap: 8,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    overflow: "hidden",
   } as any,
   childCount: {
     fontSize: 13,
@@ -433,26 +523,11 @@ const styles = StyleSheet.create({
   focusBtnWrap: {
     marginRight: 6,
   } as any,
-  modelBadge: {
-    fontSize: 11,
-    fontWeight: "600" as const,
-    color: "rgba(0,0,0,0.25)",
-    fontFamily: theme.fonts.sans,
-    marginRight: 4,
-  },
-  machineToggle: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  machineBadge: {
+  badgeText: {
     fontSize: 10,
     fontWeight: "600" as const,
-    color: "rgba(0,0,0,0.25)",
+    color: "rgba(0,0,0,0.35)",
     fontFamily: theme.fonts.sans,
-  },
-  machineBadgeActive: {
-    color: "rgba(0,0,0,0.55)",
   },
   focusIcon: {
     fontSize: 14,
