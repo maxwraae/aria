@@ -167,7 +167,7 @@ export function useARIA(): UseARIAReturn {
 
       const obj = objectivesRef.current.find(o => o.id === id);
       if (obj) {
-        const session = toSession(obj, messages);
+        const session = toSession(obj, messages, objectivesRef.current);
         sessionsRef.current.set(id, session);
         setNeedsYou(toNeedsYouItems(objectivesRef.current, sessionsRef.current));
         setQuickItems(toQuickItems(objectivesRef.current, sessionsRef.current));

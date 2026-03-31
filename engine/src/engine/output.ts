@@ -12,6 +12,43 @@ import {
 } from "../db/queries.js";
 import { isWorker, getCoordinatorUrl } from "../db/node.js";
 
+interface PromotedAction {
+  tool: string;
+  summary: string;
+}
+
+function classifyToolUse(name: string, input: Record<string, unknown>): PromotedAction | null {
+  if (name === 'Edit') {
+    const fp = (input.file_path as string) ?? '';
+    const filename = fp.split('/').pop() ?? fp;
+    return { tool: 'Edit', summary: `edited ${filename}` };
+  }
+  if (name === 'Write') {
+    const fp = (input.file_path as string) ?? '';
+    const filename = fp.split('/').pop() ?? fp;
+    return { tool: 'Write', summary: `wrote ${filename}` };
+  }
+  if (name === 'Bash') {
+    const cmd = ((input.command as string) ?? '').trim();
+    if (cmd.startsWith('aria spawn-child')) {
+      const match = cmd.match(/aria spawn-child\s+["']([^"']+)["']/);
+      const obj = match?.[1] ?? 'child';
+      return { tool: 'spawn-child', summary: `spawned "${obj}"` };
+    }
+    return null;
+  }
+  if (name === 'WebSearch') {
+    const query = (input.query as string) ?? (input.search_query as string) ?? '';
+    return { tool: 'WebSearch', summary: `searched "${query.slice(0, 50)}"` };
+  }
+  if (name === 'WebFetch') {
+    const url = (input.url as string) ?? '';
+    const domain = url.replace(/^https?:\/\//, '').split('/')[0] ?? url;
+    return { tool: 'WebFetch', summary: `fetched ${domain}` };
+  }
+  return null;
+}
+
 /**
  * Process the NDJSON stream from `claude -p --output-format stream-json`.
  *
@@ -29,9 +66,27 @@ export function processOutput(
   let lastAssistantText = "";
   let streamedText = "";
   let buffer = "";
+  const actions: PromotedAction[] = [];
   // Capture last N stderr lines for diagnostics on silent failure
   const MAX_STDERR_LINES = 20;
   const stderrLines: string[] = [];
+
+  // ── Activity watchdog ─────────────────────────────────────────────
+  const ACTIVITY_TIMEOUT = 5 * 60 * 1000; // 5 minutes with no I/O = hung
+  const WATCHDOG_INTERVAL = 30_000;        // check every 30s
+  let lastActivityTime = Date.now();
+  let watchdogKilled = false;
+
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastActivityTime > ACTIVITY_TIMEOUT) {
+      watchdogKilled = true;
+      process.stderr.write(`[${tag}] No I/O for 5m — killing hung process (pid ${proc.pid})\n`);
+      proc.kill('SIGTERM');
+      setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch {}
+      }, 5000);
+    }
+  }, WATCHDOG_INTERVAL);
 
   // ── NDJSON line parser ───────────────────────────────────────────
 
@@ -83,6 +138,15 @@ export function processOutput(
               );
             }
           }
+
+          // Classify tool calls for action annotations
+          if (block.type === "tool_use") {
+            const action = classifyToolUse(
+              block.name as string,
+              (block.input as Record<string, unknown>) ?? {}
+            );
+            if (action) actions.push(action);
+          }
         }
         break;
       }
@@ -124,6 +188,7 @@ export function processOutput(
   // ── Stream processing ────────────────────────────────────────────
 
   proc.stdout?.on("data", (chunk: Buffer) => {
+    lastActivityTime = Date.now();
     buffer += chunk.toString();
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? ""; // keep incomplete last line
@@ -139,6 +204,7 @@ export function processOutput(
   });
 
   proc.stderr?.on("data", (chunk: Buffer) => {
+    lastActivityTime = Date.now();
     const text = chunk.toString();
     process.stderr.write(`[${tag}] ${text}`);
     // Capture lines for diagnostics, trimming the ring buffer
@@ -152,6 +218,7 @@ export function processOutput(
   // ── Turn completion ──────────────────────────────────────────────
 
   proc.on("close", (code) => {
+    clearInterval(watchdog);
     if (code !== 0 && code !== null) {
       process.stderr.write(`[${tag}] Process exited with code ${code}\n`);
     }
@@ -180,6 +247,9 @@ export function processOutput(
         } else {
           parts.push("Agent exited without producing output or changing status.");
         }
+        if (watchdogKilled) {
+          parts.push("Killed by watchdog after 5m of no I/O — likely stalled after machine sleep.");
+        }
         const errorContext = parts.join("\n\n");
         updateLastError(db, objectiveId, errorContext);
 
@@ -198,6 +268,30 @@ export function processOutput(
     // 3. Store the assistant's full output in the objective's own inbox
     //    Uses streamedText (all text deltas) rather than lastAssistantText (last block only)
     //    so intermediate text before tool calls is preserved.
+
+    // Persist promoted tool actions as individual inbox messages
+    const deduped: PromotedAction[] = [];
+    for (const action of actions) {
+      const prev = deduped[deduped.length - 1];
+      if (prev && prev.summary === action.summary) {
+        const countMatch = prev.summary.match(/ \((\d+)x\)$/);
+        const count = countMatch ? parseInt(countMatch[1]) + 1 : 2;
+        prev.summary = prev.summary.replace(/ \(\d+x\)$/, '') + ` (${count}x)`;
+      } else {
+        deduped.push({ ...action });
+      }
+    }
+    for (const action of deduped) {
+      const actionMsg = insertMessage(db, {
+        objective_id: objectiveId,
+        message: action.summary,
+        sender: objectiveId,
+        type: "action",
+        cascade_id: cascadeId,
+      });
+      db.prepare("UPDATE inbox SET turn_id = ? WHERE id = ?").run(turnId, actionMsg.id);
+    }
+
     const fullOutput = streamedText || lastAssistantText;
     if (fullOutput) {
 

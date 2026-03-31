@@ -4,6 +4,7 @@ import type { ChatMessage } from "../types/chat";
 import { UserMessage } from "./UserMessage";
 import { AgentMessage } from "./AgentMessage";
 import { Figure } from "./Figure";
+import { ActionAnnotation } from "./ActionAnnotation";
 import { theme } from "../constants/theme";
 
 interface MessageListProps {
@@ -58,6 +59,8 @@ export function MessageList({ messages, scrollEnabled = true, bottomPad = 120, t
             isSpeaking={speakingMessageId === item.id}
           />
         );
+      case "action":
+        return <ActionAnnotation action={item} />;
       case "tool_call":
         return <Figure tool={item} />;
       case "image":
