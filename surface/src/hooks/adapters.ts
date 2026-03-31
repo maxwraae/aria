@@ -162,6 +162,14 @@ export function toMessages(messages: InboxMessage[], objectives?: Objective[], s
   }
 
   return messages.flatMap(m => {
+    if (m.type === 'action') {
+      let tool = 'unknown';
+      if (m.message.startsWith('edited ') || m.message.startsWith('wrote ')) tool = 'Edit';
+      else if (m.message.startsWith('searched ')) tool = 'WebSearch';
+      else if (m.message.startsWith('spawned ')) tool = 'spawn-child';
+      else if (m.message.startsWith('fetched ')) tool = 'WebFetch';
+      return [{ id: m.id, kind: 'action' as const, summary: m.message, tool, timestamp: m.created_at * 1000 }];
+    }
     if (m.sender === 'max') {
       const match = ATTACHMENT_REGEX.exec(m.message);
       if (match) {

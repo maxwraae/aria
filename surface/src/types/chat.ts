@@ -47,7 +47,15 @@ export interface FileFigure {
   timestamp: number;
 }
 
-export type ChatMessage = UserMessage | AgentMessage | ToolCall | ImageFigure | FileFigure;
+export interface ActionAnnotation {
+  id: string;
+  kind: "action";
+  summary: string;
+  tool: string;
+  timestamp: number;
+}
+
+export type ChatMessage = UserMessage | AgentMessage | ToolCall | ImageFigure | FileFigure | ActionAnnotation;
 
 export interface ChatSession {
   id: string;
