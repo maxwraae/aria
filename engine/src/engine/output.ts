@@ -1,5 +1,7 @@
-import { ChildProcess } from "child_process";
+import { ChildProcess, spawn } from "child_process";
 import fs from "fs";
+import { join } from "path";
+import { homedir } from "os";
 import Database from "better-sqlite3";
 import { emit } from './streams.js';
 import {
@@ -214,6 +216,32 @@ export function processOutput(
       if (stderrLines.length > MAX_STDERR_LINES) stderrLines.shift();
     }
   });
+
+  // ── API wake-up watchdog ─────────────────────────────────────────
+  // If no stdout bytes arrive within 10s, the API may be stalled.
+  // Fire a throwaway haiku ping to unblock it, then log the event.
+  const WAKE_TIMEOUT_MS = 10_000;
+  let wakeTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    wakeTimer = null;
+    process.stderr.write(`[wake-up] ${tag} no output in 10s — firing haiku ping\n`);
+
+    const logLine = `${new Date().toISOString()} ${objectiveId} triggered\n`;
+    try {
+      fs.appendFileSync(join(homedir(), ".aria", "wake-up.log"), logLine);
+    } catch { /* dir may not exist yet — non-fatal */ }
+
+    const claudePath = process.env.CLAUDE_PATH ?? join(homedir(), ".local", "bin", "claude");
+    const ping = spawn(claudePath, ["-p", "hi", "--model", "haiku"], {
+      env: { ...process.env },
+      stdio: "ignore",
+    });
+    const killTimer = setTimeout(() => ping.kill(), 5_000);
+    ping.on("close", () => clearTimeout(killTimer));
+  }, WAKE_TIMEOUT_MS);
+
+  // Cancel the watchdog if output arrives in time or process ends early
+  proc.stdout?.once("data", () => { if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; } });
+  proc.on("close", () => { if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; } });
 
   // ── Turn completion ──────────────────────────────────────────────
 
