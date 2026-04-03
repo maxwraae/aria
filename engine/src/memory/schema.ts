@@ -26,4 +26,31 @@ export function initMemoryTables(db: Database.Database): void {
       "CREATE VIRTUAL TABLE memories_fts USING fts5(content, type)"
     );
   }
+
+  // WAL mode for safe concurrent reads/writes
+  db.pragma("journal_mode = WAL");
+
+  // Co-occurrence graph for contextuality
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_edges (
+      memory_a TEXT NOT NULL,
+      memory_b TEXT NOT NULL,
+      count INTEGER DEFAULT 0,
+      last_turn INTEGER,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (memory_a, memory_b),
+      CHECK (memory_a < memory_b)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_edges_a ON memory_edges(memory_a);
+    CREATE INDEX IF NOT EXISTS idx_edges_b ON memory_edges(memory_b);
+  `);
+
+  // node_weight: prep for V2 usage attribution — not read/written in V1
+  const hasNodeWeight = db
+    .prepare("SELECT COUNT(*) as c FROM pragma_table_info('memories') WHERE name = 'node_weight'")
+    .get() as { c: number };
+  if (hasNodeWeight.c === 0) {
+    db.exec("ALTER TABLE memories ADD COLUMN node_weight INTEGER DEFAULT 0");
+  }
 }

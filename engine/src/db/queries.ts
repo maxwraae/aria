@@ -1,6 +1,11 @@
 import Database from "better-sqlite3";
+import fs from "fs";
+import path from "path";
 import { generateId, now } from "./utils.js";
 import { withPeer } from './unified.js';
+import { pushSync } from './push.js';
+import { getDataDir } from "./node.js";
+import { loadEngineConfig } from '../engine/engine-config.js';
 
 // ── Protected objectives (cannot be abandoned, pruned, or resolved) ──
 export const PROTECTED_IDS = new Set(['root', 'quick']);
@@ -26,6 +31,7 @@ export interface Objective {
   created_at: number;
   updated_at: number;
   resolved_at: number | null;
+  work_path: string | null;
 }
 
 export interface InboxMessage {
@@ -35,6 +41,7 @@ export interface InboxMessage {
   sender: string;
   type: string;
   turn_id: string | null;
+  processed_by: string | null;
   cascade_id: string | null;
   created_at: number;
 }
@@ -45,6 +52,7 @@ export interface Turn {
   turn_number: number;
   user_message: string | null;
   session_id: string | null;
+  cascade_id: string | null;
   created_at: number;
 }
 
@@ -106,7 +114,16 @@ export function createObjective(
      VALUES ((SELECT rowid FROM objectives WHERE id = ?), ?, ?, ?, ?)`
   ).run(id, opts.objective, null, description, null);
 
-  return getObjective(db, id)!;
+  // Create work file
+  const workDir = path.join(getDataDir(), "work");
+  fs.mkdirSync(workDir, { recursive: true });
+  const workPath = path.join(workDir, `${id}.md`);
+  fs.writeFileSync(workPath, "", "utf-8");
+  stmt(db, "setWorkPath", "UPDATE objectives SET work_path = ? WHERE id = ?").run(workPath, id);
+
+  const created = getObjective(db, id)!;
+  pushSync({ objectives: [created] as any[] });
+  return created;
 }
 
 export function getObjective(db: Database.Database, id: string): Objective | undefined {
@@ -160,6 +177,8 @@ export function updateStatus(db: Database.Database, id: string, status: string):
       "UPDATE objectives SET status = ?, updated_at = ? WHERE id = ?"
     ).run(status, ts, id);
   }
+  const obj = getObjective(db, id);
+  if (obj) pushSync({ objectives: [obj] as any[] });
 }
 
 export function setWaitingOn(db: Database.Database, id: string, reason: string): void {
@@ -177,6 +196,8 @@ export function setWaitingOn(db: Database.Database, id: string, reason: string):
     `UPDATE objectives_fts SET waiting_on = ?
      WHERE rowid = (SELECT rowid FROM objectives WHERE id = ?)`
   ).run(reason, id);
+  const obj = getObjective(db, id);
+  if (obj) pushSync({ objectives: [obj] as any[] });
 }
 
 export function clearWaitingOn(db: Database.Database, id: string): void {
@@ -194,6 +215,8 @@ export function clearWaitingOn(db: Database.Database, id: string): void {
     `UPDATE objectives_fts SET waiting_on = NULL
      WHERE rowid = (SELECT rowid FROM objectives WHERE id = ?)`
   ).run(id);
+  const obj = getObjective(db, id);
+  if (obj) pushSync({ objectives: [obj] as any[] });
 }
 
 export function updateObjective(db: Database.Database, id: string, fields: { objective?: string; description?: string; machine?: string | null; model?: string }): void {
@@ -213,6 +236,8 @@ export function updateObjective(db: Database.Database, id: string, fields: { obj
   if (fields.model !== undefined) {
     stmt(db, "updateObjectiveModel", "UPDATE objectives SET model = ?, updated_at = ? WHERE id = ?").run(fields.model, ts, id);
   }
+  const obj = getObjective(db, id);
+  if (obj) pushSync({ objectives: [obj] as any[] });
 }
 
 export function setResolutionSummary(db: Database.Database, id: string, summary: string): void {
@@ -230,9 +255,14 @@ export function setResolutionSummary(db: Database.Database, id: string, summary:
     `UPDATE objectives_fts SET resolution_summary = ?
      WHERE rowid = (SELECT rowid FROM objectives WHERE id = ?)`
   ).run(summary, id);
+  const obj = getObjective(db, id);
+  if (obj) pushSync({ objectives: [obj] as any[] });
 }
 
-export function cascadeAbandon(db: Database.Database, parentId: string): void {
+export function cascadeAbandon(db: Database.Database, parentId: string, _collected?: string[]): void {
+  const isTopLevel = !_collected;
+  const collected = _collected ?? [];
+
   const abandon = db.transaction(() => {
     const ts = now();
     const children = stmt(
@@ -248,14 +278,23 @@ export function cascadeAbandon(db: Database.Database, parentId: string): void {
         "abandonObjective",
         "UPDATE objectives SET status = 'abandoned', updated_at = ? WHERE id = ?"
       ).run(ts, child.id);
-      // Recurse into this child's children
-      cascadeAbandon(db, child.id);
+      collected.push(child.id);
+      cascadeAbandon(db, child.id, collected);
     }
   });
   abandon();
+
+  // Only push at the top-level call
+  if (isTopLevel && collected.length > 0) {
+    const rows = collected.map(id => getObjective(db, id)).filter(Boolean);
+    if (rows.length > 0) pushSync({ objectives: rows as any[] });
+  }
 }
 
-export function cascadeMachine(db: Database.Database, parentId: string, machine: string | null): void {
+export function cascadeMachine(db: Database.Database, parentId: string, machine: string | null, _collected?: string[]): void {
+  const isTopLevel = !_collected;
+  const collected = _collected ?? [];
+
   const cascade = db.transaction(() => {
     const ts = now();
     const children = stmt(
@@ -270,10 +309,17 @@ export function cascadeMachine(db: Database.Database, parentId: string, machine:
         "updateObjectiveMachine",
         "UPDATE objectives SET machine = ?, updated_at = ? WHERE id = ?"
       ).run(machine, ts, child.id);
-      cascadeMachine(db, child.id, machine);
+      collected.push(child.id);
+      cascadeMachine(db, child.id, machine, collected);
     }
   });
   cascade();
+
+  // Only push at the top-level call
+  if (isTopLevel && collected.length > 0) {
+    const rows = collected.map(id => getObjective(db, id)).filter(Boolean);
+    if (rows.length > 0) pushSync({ objectives: rows as any[] });
+  }
 }
 
 export function resetFailCount(db: Database.Database, id: string): void {
@@ -283,6 +329,8 @@ export function resetFailCount(db: Database.Database, id: string): void {
     "resetFail",
     "UPDATE objectives SET fail_count = 0, updated_at = ? WHERE id = ?"
   ).run(ts, id);
+  const obj = getObjective(db, id);
+  if (obj) pushSync({ objectives: [obj] as any[] });
 }
 
 export function incrementFailCount(db: Database.Database, id: string): number {
@@ -295,6 +343,8 @@ export function incrementFailCount(db: Database.Database, id: string): number {
   const row = stmt(db, "getFailCount", "SELECT fail_count FROM objectives WHERE id = ?").get(
     id
   ) as { fail_count: number } | undefined;
+  const obj = getObjective(db, id);
+  if (obj) pushSync({ objectives: [obj] as any[] });
   return row?.fail_count ?? 0;
 }
 
@@ -305,6 +355,8 @@ export function updateLastError(db: Database.Database, id: string, error: string
     "updateLastError",
     "UPDATE objectives SET last_error = ?, updated_at = ? WHERE id = ?"
   ).run(error, ts, id);
+  const obj = getObjective(db, id);
+  if (obj) pushSync({ objectives: [obj] as any[] });
 }
 
 export function searchObjectives(db: Database.Database, query: string): Objective[] {
@@ -358,7 +410,9 @@ export function insertMessage(
     opts.objective_id
   );
 
-  return stmt(db, "getMessage", "SELECT * FROM inbox WHERE id = ?").get(id) as InboxMessage;
+  const msg = stmt(db, "getMessage", "SELECT * FROM inbox WHERE id = ?").get(id) as InboxMessage;
+  pushSync({ inbox: [msg] as any[] });
+  return msg;
 }
 
 export function getUnprocessedMessages(
@@ -412,7 +466,7 @@ export function getPendingObjectives(db: Database.Database): Objective[] {
 
 export function createTurn(
   db: Database.Database,
-  opts: { objective_id: string }
+  opts: { objective_id: string; cascade_id?: string }
 ): Turn {
   const id = generateId();
   const ts = now();
@@ -425,14 +479,14 @@ export function createTurn(
 
   const turnNumber = maxTurn.max_turn + 1;
 
-  stmt(
-    db,
-    "insertTurn",
-    `INSERT INTO turns (id, objective_id, turn_number, created_at)
-     VALUES (?, ?, ?, ?)`
-  ).run(id, opts.objective_id, turnNumber, ts);
+  db.prepare(
+    `INSERT INTO turns (id, objective_id, turn_number, cascade_id, created_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(id, opts.objective_id, turnNumber, opts.cascade_id ?? null, ts);
 
-  return stmt(db, "getTurn", "SELECT * FROM turns WHERE id = ?").get(id) as Turn;
+  const turn = stmt(db, "getTurn", "SELECT * FROM turns WHERE id = ?").get(id) as Turn;
+  pushSync({ turns: [turn] as any[] });
+  return turn;
 }
 
 export function getTurnCount(db: Database.Database, objectiveId: string): number {
@@ -638,13 +692,47 @@ export function resolveCascadeId(db: Database.Database, objectiveId: string): st
   return anyMsg?.cascade_id ?? null;
 }
 
+export function getCascadeTurnCount(db: Database.Database, cascadeId: string): number {
+  const row = db.prepare(
+    "SELECT COUNT(*) as count FROM turns WHERE cascade_id = ?"
+  ).get(cascadeId) as { count: number };
+  return row.count;
+}
+
+/** Stop all objectives with unprocessed messages from this cascade. */
+export function stopCascade(db: Database.Database, cascadeId: string): string[] {
+  const affected = db.prepare(
+    `SELECT DISTINCT objective_id FROM inbox
+     WHERE cascade_id = ? AND turn_id IS NULL`
+  ).all(cascadeId) as { objective_id: string }[];
+
+  const stoppedIds: string[] = [];
+  for (const { objective_id } of affected) {
+    db.prepare(
+      `UPDATE inbox SET turn_id = 'cascade-stopped'
+       WHERE objective_id = ? AND cascade_id = ? AND turn_id IS NULL`
+    ).run(objective_id, cascadeId);
+
+    const obj = getObjective(db, objective_id);
+    if (obj && ['idle', 'needs-input', 'thinking'].includes(obj.status)) {
+      updateStatus(db, objective_id, 'stopped');
+      stoppedIds.push(objective_id);
+    }
+  }
+  return stoppedIds;
+}
+
 // ── Depth cap ─────────────────────────────────────────────────────
 
-export const MAX_AUTONOMOUS_DEPTH = 5;
+export function getMaxAutonomousDepth(): number {
+  return loadEngineConfig().max_autonomous_depth;
+}
 
 // ── Fan-out cap ────────────────────────────────────────────────────
 
-export const MAX_CHILDREN = 10;
+export function getMaxChildren(): number {
+  return loadEngineConfig().max_children;
+}
 
 export function getActiveChildCount(db: Database.Database, parentId: string): number {
   const row = stmt(
@@ -700,7 +788,7 @@ export function checkDepthCap(
   const autonomousDepth = newChildDepth - initiationDepth;
 
   return {
-    allowed: autonomousDepth < MAX_AUTONOMOUS_DEPTH,
+    allowed: autonomousDepth < getMaxAutonomousDepth(),
     autonomousDepth,
     newChildDepth,
   };
@@ -904,8 +992,8 @@ export function syncFromPeer(db: Database.Database): void {
 
     // Copy new turns from peer
     db.exec(`
-      INSERT OR IGNORE INTO turns (id, objective_id, turn_number, user_message, session_id, created_at)
-      SELECT id, objective_id, turn_number, user_message, session_id, created_at
+      INSERT OR IGNORE INTO turns (id, objective_id, turn_number, user_message, session_id, cascade_id, created_at)
+      SELECT id, objective_id, turn_number, user_message, session_id, cascade_id, created_at
       FROM peer.turns
     `);
 
@@ -975,4 +1063,51 @@ export function getChildrenUnified(db: Database.Database, parentId: string): Obj
     `;
     return db.prepare(query).all(parentId, parentId, parentId) as Objective[];
   });
+}
+
+export function syncInboxRow(db: Database.Database, row: InboxMessage): void {
+  stmt(db, 'syncInboxRow',
+    `INSERT OR IGNORE INTO inbox (id, objective_id, sender, type, message, turn_id, processed_by, cascade_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(row.id, row.objective_id, row.sender, row.type, row.message,
+    row.turn_id, row.processed_by, row.cascade_id, row.created_at);
+}
+
+export function syncObjectiveRow(db: Database.Database, row: Objective): void {
+  stmt(db, 'syncObjInsert',
+    `INSERT OR IGNORE INTO objectives (id, objective, description, parent, status, waiting_on,
+     resolution_summary, important, urgent, model, cwd, machine, depth, fail_count, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(row.id, row.objective, row.description, row.parent, row.status, row.waiting_on,
+    row.resolution_summary, row.important, row.urgent, row.model, row.cwd, row.machine,
+    row.depth, row.fail_count, row.created_at, row.updated_at);
+
+  stmt(db, 'syncObjUpdate',
+    `UPDATE objectives SET
+       objective = ?, description = ?, status = ?, waiting_on = ?, resolution_summary = ?,
+       important = ?, urgent = ?, model = ?, machine = ?, fail_count = ?,
+       resolved_at = ?, updated_at = ?
+     WHERE id = ? AND ? > updated_at`
+  ).run(row.objective, row.description, row.status, row.waiting_on, row.resolution_summary,
+    row.important, row.urgent, row.model, row.machine, row.fail_count,
+    row.resolved_at, row.updated_at, row.id, row.updated_at);
+
+  // Rebuild FTS so search works for peer-created objectives
+  stmt(db, 'syncObjFtsDel',
+    `DELETE FROM objectives_fts WHERE rowid = (SELECT rowid FROM objectives WHERE id = ?)`
+  ).run(row.id);
+  const local = getObjective(db, row.id);
+  if (local) {
+    stmt(db, 'syncObjFtsIns',
+      `INSERT INTO objectives_fts (rowid, objective, waiting_on, description, resolution_summary)
+       SELECT rowid, objective, waiting_on, description, resolution_summary FROM objectives WHERE id = ?`
+    ).run(row.id);
+  }
+}
+
+export function syncTurnRow(db: Database.Database, row: Turn): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO turns (id, objective_id, turn_number, user_message, session_id, cascade_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(row.id, row.objective_id, row.turn_number, row.user_message, row.session_id, row.cascade_id ?? null, row.created_at);
 }

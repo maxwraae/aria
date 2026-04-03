@@ -63,6 +63,7 @@ export interface ChatSession {
   status: "idle" | "thinking" | "needs-input" | "resolved" | "failed";
   model?: string;
   messages: ChatMessage[];
+  work?: string | null;
 }
 
 /** One tool entry within a TracePill group */

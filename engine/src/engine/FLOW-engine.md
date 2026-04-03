@@ -164,6 +164,30 @@ The `getTreeUnified`, `getObjectiveUnified`, `getConversationUnified`, and `getC
 
 ---
 
+## Usage Windows and the Heartbeat Ping
+
+Claude's API enforces a 5-hour rolling usage window. Any API call starts a bucket with a utilization percentage and a `resets_at` timestamp. Once the bucket resets, you get a fresh allocation. The window anchors to the first call — if you ping at 08:01, the bucket resets at ~13:00. If nothing calls the API, no window is running.
+
+Aria maintains a continuous chain of 5-hour windows across the full 24-hour day. Five ping times are defined in `~/.aria/settings.json`: 03:01, 08:01, 13:01, 18:01, and 23:01. Every window gets a ping — a minimal `claude -p "ping" --model haiku` call that exists solely to touch the API and anchor the next 5-hour reset. The Haiku call completes and its response is discarded. Its only purpose is to start the clock.
+
+The critical window is 03:01. A ping at 03:01 means the bucket resets at 08:00 — exactly when Max starts working. Without this ping, the first real usage of the day would start the window at whatever time it happened, wasting hours of allocation on a misaligned bucket.
+
+The `maybePing` function in `server/usage.ts` runs inside the engine's 1-second poll loop. On each poll it checks: are we within 2 minutes of any window start time? If yes, and we haven't already pinged this window, fire the Haiku call. The 2-minute grace window means the engine doesn't have to hit the exact second — it just needs to be running. The function tracks which window it last pinged in memory (a module-level variable) to avoid double-pinging.
+
+### Online and Offline Hours
+
+The settings also define online hours (currently 06:00–22:00). This is not a gate on whether Aria can work — Aria is always active and can always make API calls. The distinction is about background process intensity. During online hours, Max is likely using Claude himself, so Aria's background work (child objectives, memory extraction, scheduled tasks) competes for the same usage bucket. During offline hours (22:00–06:00), Max is away and Aria has the bucket to itself.
+
+The `getWindowStatus` function exposes an `is_online` boolean that the engine and other systems can use to throttle background work. It also tracks whether the weekly usage ceiling (default 85% of the 7-day bucket) has been hit via a `ceiling_hit` flag. Both are signals, not hard blocks — the engine decides how to act on them.
+
+### Drift Detection
+
+Sometimes the actual window drifts out of alignment with the expected schedule. This happens when something — Max using Claude Code directly, or Aria making an unexpected call — starts a window at an unplanned time. The `getWindowStatus` function compares the expected reset hour (window start + 5) against the actual reset hour from the API response. If they don't match, `in_sync` is false and `drift_hours` shows the gap. A positive drift means the window resets later than expected; negative means earlier.
+
+Drift is currently detected and reported but not automatically corrected. The system surfaces it through the `/api/usage` endpoint so the surface can display it, and so future logic can act on it — for instance, by going quiet until the drifted window expires and re-pinging at the correct time.
+
+---
+
 ## Scope Enforcement
 
 The `aria` CLI commands that agents run have scope constraints enforced at validation time (`commands/registry.ts`). `succeed`, `fail`, and `reject` require that the target objective be a descendant of the caller — the system walks the parent chain to verify ancestry. An agent cannot resolve an objective it didn't create. It also cannot resolve itself; only its parent can do that. The root and `quick` objectives are additionally protected and return a 403 if anything tries to resolve or fail them. `tell` has no scope restriction — any agent can message any other objective. `wait` operates only on the caller's own objective. These constraints enforce the tree's authority structure: parents judge children, not the other way around.

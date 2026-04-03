@@ -18,6 +18,7 @@ export function assembleContext(
     objectiveId: ctx.objectiveId ?? null,
     budget: ctx.budget ?? DEFAULT_BUDGET,
     config: ctx.config ?? {},
+    memoryEmbeddings: ctx.memoryEmbeddings ?? null,
   };
 
   const sections: BrickResult[] = [];

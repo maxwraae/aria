@@ -6,7 +6,7 @@ import {
   getInitiationDepth,
   checkDepthCap,
   getObjective,
-  MAX_AUTONOMOUS_DEPTH,
+  getMaxAutonomousDepth,
   INITIATION_WINDOW,
 } from "../db/queries.js";
 import { now } from "../db/utils.js";
@@ -37,7 +37,8 @@ function createTestDb(): Database.Database {
       fail_count INTEGER DEFAULT 0,
       created_at INTEGER,
       updated_at INTEGER,
-      resolved_at INTEGER
+      resolved_at INTEGER,
+      work_path TEXT
     );
 
     CREATE INDEX idx_status ON objectives(status);

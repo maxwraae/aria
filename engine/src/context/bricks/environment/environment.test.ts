@@ -27,7 +27,8 @@ function createTestDb(): Database.Database {
       fail_count INTEGER DEFAULT 0,
       created_at INTEGER,
       updated_at INTEGER,
-      resolved_at INTEGER
+      resolved_at INTEGER,
+      work_path TEXT
     );
 
     CREATE INDEX idx_status ON objectives(status);
@@ -60,6 +61,7 @@ function createTestDb(): Database.Database {
       turn_number INTEGER NOT NULL,
       user_message TEXT,
       session_id TEXT,
+      cascade_id TEXT,
       created_at INTEGER,
       FOREIGN KEY (objective_id) REFERENCES objectives(id)
     );

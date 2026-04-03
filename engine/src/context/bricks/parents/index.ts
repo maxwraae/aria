@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import type { Brick, BrickContext, BrickResult } from "../../types.js";
 import { getAncestors, getConversation } from "../../../db/queries.js";
 import type { Objective } from "../../../db/queries.js";
@@ -29,6 +30,16 @@ function renderFullAncestor(
   if (obj.description) {
     lines.push(`## Description`, ``);
     lines.push(obj.description, ``);
+  }
+
+  if (obj.work_path) {
+    try {
+      const workContent = readFileSync(obj.work_path, "utf-8").trim();
+      if (workContent) {
+        lines.push(`## Work`, ``);
+        lines.push(workContent, ``);
+      }
+    } catch {}
   }
 
   lines.push(`## Status`, ``);
@@ -83,6 +94,16 @@ function renderMoreAncestors(
 
     if (obj.description) {
       sectionLines.push(obj.description, ``);
+    }
+
+    if (obj.work_path) {
+      try {
+        const workContent = readFileSync(obj.work_path, "utf-8").trim();
+        if (workContent) {
+          sectionLines.push(`**Work:**`);
+          sectionLines.push(workContent, ``);
+        }
+      } catch {}
     }
 
     sectionLines.push(`**Status:** ${statusLine(obj)}`);

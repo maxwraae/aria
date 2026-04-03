@@ -11,5 +11,6 @@
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "exclude": ["src/engine/bounce-detector.test.ts", "src/engine/max-priority-lane.test.ts"]
 }

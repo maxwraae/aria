@@ -4,6 +4,7 @@ import { join } from "path";
 import { homedir } from "os";
 import Database from "better-sqlite3";
 import { emit } from './streams.js';
+import { pushStream } from '../db/push.js';
 import {
   updateTurnSession,
   getObjective,
@@ -12,7 +13,8 @@ import {
   updateLastError,
   resetFailCount,
 } from "../db/queries.js";
-import { isWorker, getCoordinatorUrl } from "../db/node.js";
+import { openMemoriesDbWritable } from '../context/bricks/memory/index.js';
+import { incrementEdges } from '../memory/queries.js';
 
 interface PromotedAction {
   tool: string;
@@ -172,6 +174,7 @@ export function processOutput(
           if (delta?.type === "text_delta" && typeof delta.text === "string") {
             streamedText += delta.text;
             emit(objectiveId, streamedText, false);
+            pushStream(objectiveId, streamedText, false);
           }
         }
         break;
@@ -341,7 +344,8 @@ export function processOutput(
 
       for (const { sender } of triggeredMessages) {
         const senderObj = getObjective(db, sender);
-        if (senderObj) {
+        // Never auto-reply downward — only route back to parent/siblings, not children
+        if (senderObj && senderObj.parent !== objectiveId) {
           insertMessage(db, {
             objective_id: sender,
             message: fullOutput,
@@ -355,32 +359,7 @@ export function processOutput(
 
     // Notify stream subscribers that this turn is complete
     emit(objectiveId, '', true);
-
-    // 5. Push result to coordinator (worker mode only)
-    if (isWorker() && fullOutput) {
-      const coordUrl = getCoordinatorUrl();
-      if (coordUrl) {
-        const finalStatus = obj?.status === 'thinking' ? 'needs-input' : (obj?.status ?? 'needs-input');
-        fetch(`${coordUrl}/api/worker/turns/${turnId}/complete`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            objectiveId,
-            status: finalStatus,
-            lastAssistantText: fullOutput,
-            sessionId: null, // already set during stream
-          }),
-        }).then(res => {
-          if (res.ok) {
-            process.stderr.write(`[${tag}] Pushed result to coordinator\n`);
-          } else {
-            process.stderr.write(`[${tag}] Coordinator push failed: ${res.status}\n`);
-          }
-        }).catch(err => {
-          process.stderr.write(`[${tag}] Coordinator unreachable: ${err.message}\n`);
-        });
-      }
-    }
+    pushStream(objectiveId, '', true);
 
     // 6. Clean up context temp file
     const contextPath = `/tmp/aria-context-${objectiveId}.md`;
@@ -388,6 +367,22 @@ export function processOutput(
       fs.unlinkSync(contextPath);
     } catch {
       // Already cleaned up or never written — fine
+    }
+
+    // 7. Update contextuality edges for memories injected this turn
+    try {
+      const row = db.prepare('SELECT injected_memory_ids FROM turns WHERE id = ?')
+        .get(turnId) as { injected_memory_ids: string | null } | undefined;
+      const ids: string[] = row?.injected_memory_ids ? JSON.parse(row.injected_memory_ids) : [];
+      if (ids.length > 1) {
+        const memDb = openMemoriesDbWritable();
+        if (memDb) {
+          incrementEdges(memDb, ids);
+          memDb.close();
+        }
+      }
+    } catch {
+      // Non-critical — skip silently
     }
   });
 }

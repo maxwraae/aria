@@ -12,7 +12,7 @@ import {
 import { now } from "../db/utils.js";
 
 // ── Constants matching loop.ts ──────────────────────────────────────────────
-const STUCK_THRESHOLD = 30 * 60; // 30 minutes (seconds)
+const STUCK_THRESHOLD = 10 * 60; // 10 minutes (seconds)
 const MAX_FAIL_COUNT = 2;
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -41,7 +41,8 @@ function createTestDb(): Database.Database {
       fail_count INTEGER DEFAULT 0,
       created_at INTEGER,
       updated_at INTEGER,
-      resolved_at INTEGER
+      resolved_at INTEGER,
+      work_path TEXT
     );
 
     CREATE INDEX idx_status ON objectives(status);
@@ -151,7 +152,7 @@ describe("stuck timeout recovery", () => {
     });
     updateStatus(db, obj.id, "thinking");
 
-    // Set updated_at to 5 minutes ago — well within the 30-minute threshold
+    // Set updated_at to 5 minutes ago — well within the 10-minute threshold
     const fiveMinAgo = now() - 5 * 60;
     setUpdatedAt(db, obj.id, fiveMinAgo);
 
@@ -173,8 +174,8 @@ describe("stuck timeout recovery", () => {
     });
     updateStatus(db, obj.id, "thinking");
 
-    // Set updated_at to 35 minutes ago — beyond the 30-minute threshold
-    const thirtyFiveMinAgo = now() - 35 * 60;
+    // Set updated_at to 15 minutes ago — beyond the 10-minute threshold
+    const thirtyFiveMinAgo = now() - 15 * 60;
     setUpdatedAt(db, obj.id, thirtyFiveMinAgo);
 
     recoverStuckObjectives(db);

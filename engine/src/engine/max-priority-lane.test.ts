@@ -3,9 +3,10 @@ import Database from "better-sqlite3";
 import {
   getMaxActiveSet,
   getConcurrencyLimit,
-  MAX_CONCURRENT_ACTIVE,
-  MAX_CONCURRENT_IDLE,
 } from "./concurrency.js";
+
+const MAX_CONCURRENT_IDLE = 3;
+const MAX_CONCURRENT_ACTIVE = 10;
 import {
   createObjective,
   updateStatus,
@@ -39,7 +40,8 @@ function createTestDb(): Database.Database {
       fail_count INTEGER DEFAULT 0,
       created_at INTEGER,
       updated_at INTEGER,
-      resolved_at INTEGER
+      resolved_at INTEGER,
+      work_path TEXT
     );
 
     CREATE INDEX idx_status ON objectives(status);

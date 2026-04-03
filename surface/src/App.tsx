@@ -12,6 +12,7 @@ import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { usePushSubscription } from "./hooks/usePushSubscription";
 import type { ObjectiveNode } from "./hooks/adapters";
 import { CreateIcon, PlusIcon, PATHS } from "./components/Icons";
+import { UsageRings } from "./components/UsageRings";
 
 // Time-of-day gradient: each period has a top and base color.
 // A subtle CSS breathing animation drifts lightness within the period.
@@ -415,6 +416,10 @@ function EditObjectiveOverlay({ name, description, onSubmit, onDismiss }: { name
               multiline
               numberOfLines={3}
               onKeyPress={(e: any) => {
+                if (Platform.OS === "web" && e.nativeEvent.key === "Enter" && !e.nativeEvent.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit();
+                }
                 if (Platform.OS === "web" && e.nativeEvent.key === "Escape") {
                   onDismiss();
                 }
@@ -584,7 +589,7 @@ function ResolveObjectiveOverlay({ onSucceed, onDismiss }: { onSucceed: (text: s
   );
 }
 
-function FocusOverlay({ onSend, onUpload, streamingText, onSpeak, speakingMessageId, titleColor, cardBg }: { onSend: (id: string, text: string) => Promise<void>; onUpload: (id: string, file: File) => Promise<void>; streamingText: Map<string, string>; onSpeak?: (text: string) => void; speakingMessageId?: string | null; titleColor?: string; cardBg?: string }) {
+function FocusOverlay({ onSend, onUpload, streamingText, onSpeak, speakingMessageId, titleColor, cardBg }: { onSend: (id: string, text: string) => Promise<void>; onUpload: (file: File) => Promise<string | null>; streamingText: Map<string, string>; onSpeak?: (text: string) => void; speakingMessageId?: string | null; titleColor?: string; cardBg?: string }) {
   const { focusedSession, dismissFocus } = useFocus();
   if (!focusedSession || Platform.OS !== "web") return null;
   return (
@@ -623,7 +628,7 @@ function FocusOverlay({ onSend, onUpload, streamingText, onSpeak, speakingMessag
           speakingMessageId={speakingMessageId}
           titleColor={titleColor}
           cardBg={cardBg}
-          onUpload={async (file) => onUpload(focusedSession.id, file)}
+          onUpload={onUpload}
           style={{
             flex: 1,
             width: "100%",
@@ -877,7 +882,7 @@ export default function App() {
     ? (findPathById(aria.tree, currentId) || [effectiveCurrent])
     : (effectiveCurrent ? [effectiveCurrent] : []);
   const ancestors = path.slice(0, -1);
-  const children = effectiveCurrent?.children || [];
+  const children = (effectiveCurrent?.children || []).filter(c => !(effectiveCurrent?.id === 'root' && c.id === 'quick'));
 
   // Preload conversations for children of the current objective
   useEffect(() => {
@@ -951,12 +956,38 @@ export default function App() {
             {!isMobile && (
             <View style={styles.header}>
               <View style={styles.headerInner}>
-                <GlassPill height={36}>
-                  <Text style={styles.homeIcon}>{"\u2302"}</Text>
-                </GlassPill>
-                <View style={styles.clockGroup}>
-                  <Text style={styles.clockTime}>{clock.time}</Text>
-                  <Text style={styles.clockDate}>{clock.date}</Text>
+                <Pressable onPress={() => enterWorkView('root')} style={({ pressed }) => [pressed && { opacity: 0.6 }]}>
+                  <GlassPill height={36}>
+                    <Text style={styles.homeIcon}>{"\u2302"}</Text>
+                  </GlassPill>
+                </Pressable>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 } as any}>
+                  {(() => {
+                    const thinkingCount = aria.objectives.filter(o => o.status === 'thinking').length;
+                    const needsCount = aria.needsYou.length;
+                    if (!thinkingCount && !needsCount) return null;
+                    return (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 } as any}>
+                        {thinkingCount > 0 && (
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(40,35,30,0.06)", borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3 } as any}>
+                            <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "rgba(40,35,30,0.18)" }} />
+                            <Text style={{ fontSize: 11, fontWeight: "600" as const, color: "rgba(40,35,30,0.45)", fontFamily: theme.fonts.sans }}>{thinkingCount}</Text>
+                          </View>
+                        )}
+                        {needsCount > 0 && (
+                          <Pressable onPress={enterNeedsYou} style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "hsla(30, 28%, 52%, 0.12)", borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, cursor: "pointer" } as any}>
+                            <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "hsl(30, 35%, 50%)" }} />
+                            <Text style={{ fontSize: 11, fontWeight: "600" as const, color: "hsl(30, 30%, 40%)", fontFamily: theme.fonts.sans }}>{needsCount}</Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    );
+                  })()}
+                  <UsageRings />
+                  <View style={styles.clockGroup}>
+                    <Text style={styles.clockTime}>{clock.time}</Text>
+                    <Text style={styles.clockDate}>{clock.date}</Text>
+                  </View>
                 </View>
               </View>
             </View>
@@ -983,12 +1014,7 @@ export default function App() {
                     onSpeak={handleSpeak}
                     speakingMessageId={audioPlayer.speakingId}
                     titleColor={tod.textColor} cardBg={tod.cardBg}
-                    onUpload={async (file) => {
-                      const filename = await aria.uploadFile(file);
-                      if (filename) {
-                        await aria.sendMessage(homeChatId, `[attachment:${filename}]`);
-                      }
-                    }}
+                    onUpload={async (file) => aria.uploadFile(file)}
                     style={{ flex: 1, width: "100%", maxWidth: "none", maxHeight: "none", borderRadius: 0 } as any}
                   />
                 </View>
@@ -1009,12 +1035,7 @@ export default function App() {
                     onSpeak={handleSpeak}
                     speakingMessageId={audioPlayer.speakingId}
                     titleColor={tod.textColor} cardBg={tod.cardBg}
-                    onUpload={async (file) => {
-                      const filename = await aria.uploadFile(file);
-                      if (filename) {
-                        await aria.sendMessage(homeChatId!, `[attachment:${filename}]`);
-                      }
-                    }}
+                    onUpload={async (file) => aria.uploadFile(file)}
                     style={{ flex: 1, maxWidth: 640, width: "100%" } as any}
                   />
                 </View>
@@ -1225,12 +1246,7 @@ export default function App() {
                   onSpeak={handleSpeak}
                   speakingMessageId={audioPlayer.speakingId}
                   titleColor={tod.textColor} cardBg={tod.cardBg}
-                  onUpload={async (file) => {
-                    const filename = await aria.uploadFile(file);
-                    if (filename) {
-                      await aria.sendMessage(mobileChatId, `[attachment:${filename}]`);
-                    }
-                  }}
+                  onUpload={async (file) => aria.uploadFile(file)}
                   style={{ flex: 1, width: "100%", maxWidth: "none", maxHeight: "none", borderRadius: 0 } as any}
                 />
               </View>
@@ -1255,9 +1271,12 @@ export default function App() {
                     <Text style={styles.breadcrumbCurrent}>Needs you</Text>
                   </GlassPill>
                 </View>
-                <View style={styles.clockGroup}>
-                  <Text style={styles.clockTime}>{clock.time}</Text>
-                  <Text style={styles.clockDate}>{clock.date}</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 } as any}>
+                  <UsageRings />
+                  <View style={styles.clockGroup}>
+                    <Text style={styles.clockTime}>{clock.time}</Text>
+                    <Text style={styles.clockDate}>{clock.date}</Text>
+                  </View>
                 </View>
               </View>
             </View>
@@ -1288,12 +1307,7 @@ export default function App() {
                       onSpeak={handleSpeak}
                       speakingMessageId={audioPlayer.speakingId}
                       titleColor={tod.textColor} cardBg={tod.cardBg}
-                      onUpload={async (file) => {
-                        const filename = await aria.uploadFile(file);
-                        if (filename) {
-                          await aria.sendMessage(item.session.id, `[attachment:${filename}]`);
-                        }
-                      }}
+                      onUpload={async (file) => aria.uploadFile(file)}
                     />
                     );
                   })}
@@ -1336,9 +1350,12 @@ export default function App() {
                     <Text style={styles.breadcrumbCurrent}>{effectiveCurrent?.name ?? ""}</Text>
                   </GlassPill>
                 </View>
-                <View style={styles.clockGroup}>
-                  <Text style={styles.clockTime}>{clock.time}</Text>
-                  <Text style={styles.clockDate}>{clock.date}</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 } as any}>
+                  <UsageRings />
+                  <View style={styles.clockGroup}>
+                    <Text style={styles.clockTime}>{clock.time}</Text>
+                    <Text style={styles.clockDate}>{clock.date}</Text>
+                  </View>
                 </View>
               </View>
             </View>
@@ -1383,7 +1400,7 @@ export default function App() {
                       key={child.id}
                       session={aria.getSession(child.id)}
                       focused={i === 0}
-                      onDescend={child.children && child.children.length > 0 ? () => goDown(child) : undefined}
+                      onDescend={() => goDown(child)}
                       childCount={child.children?.length ?? 0}
                       resolvedCount={child.children?.filter(c => c.status === "resolved").length ?? 0}
                       urgent={child.urgent}
@@ -1398,12 +1415,7 @@ export default function App() {
                       onSpeak={handleSpeak}
                       speakingMessageId={audioPlayer.speakingId}
                       titleColor={tod.textColor} cardBg={tod.cardBg}
-                      onUpload={async (file) => {
-                        const filename = await aria.uploadFile(file);
-                        if (filename) {
-                          await aria.sendMessage(child.id, `[attachment:${filename}]`);
-                        }
-                      }}
+                      onUpload={async (file) => aria.uploadFile(file)}
                     />
                   ))}
                 </View>
@@ -1412,7 +1424,7 @@ export default function App() {
 
           </View>
         )}
-        <FocusOverlay onSend={aria.sendMessage} onUpload={async (id, file) => { const filename = await aria.uploadFile(file); if (filename) { await aria.sendMessage(id, `[attachment:${filename}]`); } }} streamingText={aria.streamingText} onSpeak={handleSpeak} speakingMessageId={audioPlayer.speakingId} titleColor={tod.textColor} cardBg={tod.cardBg} />
+        <FocusOverlay onSend={aria.sendMessage} onUpload={async (file) => aria.uploadFile(file)} streamingText={aria.streamingText} onSpeak={handleSpeak} speakingMessageId={audioPlayer.speakingId} titleColor={tod.textColor} cardBg={tod.cardBg} />
         {createParentId && (
           <CreateObjectiveOverlay
             parentId={createParentId}
@@ -1548,7 +1560,7 @@ const styles = StyleSheet.create({
   } as any,
   homeScrollContent: {
     paddingTop: theme.layout.headerH,
-    paddingBottom: 64,
+    paddingBottom: "50vh",
   },
 
   // ── Home hero ──
@@ -1753,7 +1765,7 @@ const styles = StyleSheet.create({
           gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))",
           gap: theme.layout.gridGap,
           paddingHorizontal: theme.layout.gridPadding,
-          paddingBottom: theme.layout.gridPadding,
+          paddingBottom: "50vh",
         }
       : {
           flexDirection: "row",
@@ -1761,7 +1773,7 @@ const styles = StyleSheet.create({
           justifyContent: "flex-start",
           gap: theme.layout.gridGap,
           paddingHorizontal: theme.layout.gridPadding,
-          paddingBottom: theme.layout.gridPadding,
+          paddingBottom: "50vh",
         }),
   } as any,
 

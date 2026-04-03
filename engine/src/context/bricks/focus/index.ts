@@ -19,13 +19,18 @@ const focusBrick: Brick = {
 
     const template = readFileSync(join(__dirname, "focus.md"), "utf-8");
 
-    const content = obj.waiting_on
+    const workLine = obj.work_path
+      ? `Before you exit, update your work document: \`${obj.work_path}\``
+      : "";
+
+    const content = (obj.waiting_on
       ? template
           .replace("{{OBJECTIVE}}", obj.objective)
           .replace("{{WAITING_ON_LINE}}", `You are waiting on: ${obj.waiting_on}`)
       : template
           .replace("{{OBJECTIVE}}", obj.objective)
-          .replace("\n{{WAITING_ON_LINE}}\n", "");
+          .replace("\n{{WAITING_ON_LINE}}\n", ""))
+      .replace(workLine ? "{{WORK_LINE}}" : "\n{{WORK_LINE}}", workLine || "");
 
     return {
       name: "FOCUS",

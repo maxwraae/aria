@@ -4,9 +4,11 @@ import {
   Text,
   TextInput,
   Pressable,
+  ScrollView,
   StyleSheet,
   Platform,
 } from "react-native";
+import Markdown from "react-native-markdown-display";
 import { theme } from "../constants/theme";
 import { PlusIcon } from "./Icons";
 import { MessageList } from "./MessageList";
@@ -76,7 +78,7 @@ interface ChatCardProps {
   /** Dynamic time-of-day card background */
   cardBg?: string;
   /** Called when user picks a file to upload */
-  onUpload?: (file: File) => Promise<void>;
+  onUpload?: (file: File) => Promise<string | null | void>;
 }
 
 export function ChatCard({ session, focused = false, style, onDescend, onResolve, onAddChild, onRename, childCount = 0, resolvedCount = 0, scrollEnabled = true, urgent, important, onSend, streamingText, machine, onSetMachine, onSetModel, onSpeak, speakingMessageId, titleColor, cardBg, onUpload }: ChatCardProps) {
@@ -93,6 +95,7 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [stagedFiles, setStagedFiles] = useState<Array<{ name: string; filename: string }>>([]);
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
 
@@ -121,6 +124,7 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
     recognition.start();
     setIsListening(true);
   }, [isListening]);
+  const [mode, setMode] = useState<'chat' | 'doc'>('chat');
   const [editText, setEditText] = useState(session.name);
   const [headerHovered, setHeaderHovered] = useState(false);
 
@@ -159,6 +163,8 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
   const dragCountRef = useRef(0);
   const onUploadRef = useRef(onUpload);
   onUploadRef.current = onUpload;
+  const setStagedFilesRef = useRef(setStagedFiles);
+  setStagedFilesRef.current = setStagedFiles;
 
   useEffect(() => {
     if (Platform.OS !== "web" || !cardRef.current) return;
@@ -186,7 +192,11 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
       dragCountRef.current = 0;
       setIsDragOver(false);
       const file = e.dataTransfer?.files?.[0];
-      if (file && onUploadRef.current) onUploadRef.current(file);
+      if (file && onUploadRef.current) {
+        onUploadRef.current(file).then(filename => {
+          if (filename) setStagedFilesRef.current(prev => [...prev, { name: file.name, filename }]);
+        });
+      }
     };
 
     el.addEventListener("dragenter", onDragEnter);
@@ -203,16 +213,26 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
 
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    setMessages((prev) => [
-      ...prev,
-      { id: String(Date.now()), kind: "user", text: trimmed, timestamp: Date.now() },
-    ]);
+    if (!trimmed && stagedFiles.length === 0) return;
+    for (const f of stagedFiles) {
+      onSend?.(`[attachment:${f.filename}]`);
+    }
+    if (trimmed) {
+      setMessages((prev) => [
+        ...prev,
+        { id: String(Date.now()), kind: "user", text: trimmed, timestamp: Date.now() },
+      ]);
+      onSend?.(trimmed);
+    }
     setText("");
+    setStagedFiles([]);
     setInputHeight(20);
-    console.log('[ChatCard] handleSend:', session.id, trimmed, 'onSend:', !!onSend);
-    onSend?.(trimmed);
-  }, [text, onSend, session.id]);
+  }, [text, stagedFiles, onSend, session.id]);
+
+  // Reset input height when text is fully cleared
+  useEffect(() => {
+    if (!text) setInputHeight(20);
+  }, [text]);
 
   const handleKeyPress = (e: any) => {
     if (
@@ -230,7 +250,7 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
     setInputHeight(Math.min(Math.max(h, 20), 6 * 20));
   }, []);
 
-  const hasText = text.trim().length > 0;
+  const hasContent = text.trim().length > 0 || stagedFiles.length > 0;
 
   // Resolve header tint from status + priority (all tokens from theme)
   const status = session.status;
@@ -364,6 +384,13 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
           </Text>
         )}
         <View style={{ flex: 1 }} />
+        {/* Doc/Chat toggle */}
+        <Pressable
+          onPress={() => setMode(m => m === 'chat' ? 'doc' : 'chat')}
+          style={({ pressed }) => [styles.modeToggle, pressed && { opacity: 0.6 }]}
+        >
+          <Text style={styles.modeToggleText}>{mode === 'chat' ? 'Doc' : 'Chat'}</Text>
+        </Pressable>
         {/* Controls — fade in on hover */}
         <View style={Platform.OS === "web" ? {
           flexDirection: 'row',
@@ -408,20 +435,39 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
         </View>
       </Pressable>
 
-      <MessageList
-        messages={
-          streamingText
-            ? [...messages, { id: "__streaming__", kind: "agent" as const, text: streamingText, timestamp: Date.now() }]
-            : messages
-        }
-        scrollEnabled={scrollEnabled}
-        onSpeak={onSpeak}
-        speakingMessageId={speakingMessageId}
-        topPad={56}
-      />
+      {mode === 'doc' ? (
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.docContent}>
+          <Markdown style={docMarkdownStyles}>{session.work ?? ''}</Markdown>
+        </ScrollView>
+      ) : (
+        <MessageList
+          messages={
+            streamingText
+              ? [...messages, { id: "__streaming__", kind: "agent" as const, text: streamingText, timestamp: Date.now() }]
+              : messages
+          }
+          scrollEnabled={scrollEnabled}
+          onSpeak={onSpeak}
+          speakingMessageId={speakingMessageId}
+          topPad={56}
+          bottomPad={16}
+        />
+      )}
 
       {/* Card input bar */}
       {session.status !== "resolved" && <View style={styles.inputArea}>
+        {stagedFiles.length > 0 && (
+          <View style={styles.stagedRow}>
+            {stagedFiles.map((f, i) => (
+              <View key={i} style={styles.stagedPill}>
+                <Text style={styles.stagedName} numberOfLines={1}>{f.name}</Text>
+                <Pressable onPress={() => setStagedFiles(prev => prev.filter((_, j) => j !== i))} hitSlop={4}>
+                  <Text style={styles.stagedRemove}>×</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        )}
         <View style={styles.inputRow}>
           {Platform.OS === 'web' && onUpload && (
             <input
@@ -430,7 +476,11 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
               style={{ position: 'absolute', width: 0, height: 0, opacity: 0 }}
               onChange={(e: any) => {
                 const file = e.target?.files?.[0];
-                if (file) onUpload(file);
+                if (file && onUpload) {
+                  onUpload(file).then(filename => {
+                    if (filename) setStagedFiles(prev => [...prev, { name: file.name, filename }]);
+                  });
+                }
                 if (fileInputRef.current) fileInputRef.current.value = '';
               }}
             />
@@ -448,7 +498,7 @@ export function ChatCard({ session, focused = false, style, onDescend, onResolve
             // @ts-ignore web-only
             enterKeyHint="send"
           />
-          {hasText ? (
+          {hasContent ? (
             <Pressable onPress={handleSend} style={({ pressed }) => [styles.inputBtn, styles.sendBtn, pressed && styles.btnPressed]}>
               <Text style={styles.sendArrow}>{"\u2191"}</Text>
             </Pressable>
@@ -470,7 +520,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     ...(Platform.OS === "web"
       ? {
-          height: "clamp(280px, calc(100vh - 280px), 900px)",
+          height: "clamp(280px, calc(100vh - 280px), 680px)",
           display: "flex",
           flexDirection: "column",
           overscrollBehavior: "contain",
@@ -547,8 +597,8 @@ const styles = StyleSheet.create({
   // Card input bar — floating overlay at bottom
   inputArea: {
     ...(Platform.OS === "web"
-      ? { position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10 }
-      : { position: "absolute", bottom: 0, left: 0, right: 0 }),
+      ? { zIndex: 10 }
+      : {}),
     paddingHorizontal: 12,
     paddingTop: 8,
     paddingBottom: 12,
@@ -568,7 +618,7 @@ const styles = StyleSheet.create({
     ...theme.typography.cardInput,
     flex: 1,
     paddingVertical: 6,
-    ...(Platform.OS === "web" ? { outlineStyle: "none" } : {}),
+    ...(Platform.OS === "web" ? { outlineStyle: "none", overflow: "hidden", resize: "none" } : {}),
   } as any,
   inputBtn: {
     width: 36,
@@ -585,5 +635,142 @@ const styles = StyleSheet.create({
   },
   btnPressed: {
     opacity: 0.5,
+  },
+  stagedRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingBottom: 6,
+  },
+  stagedPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.06)",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 6,
+    maxWidth: 200,
+  },
+  stagedName: {
+    fontSize: 11,
+    color: "rgba(0,0,0,0.5)",
+    fontFamily: theme.fonts.sans,
+    flexShrink: 1,
+  },
+  stagedRemove: {
+    fontSize: 14,
+    color: "rgba(0,0,0,0.3)",
+    fontFamily: theme.fonts.sans,
+  },
+  modeToggle: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: "rgba(0,0,0,0.05)",
+  },
+  modeToggleText: {
+    fontSize: 11,
+    fontWeight: "600" as const,
+    color: "rgba(0,0,0,0.40)",
+    fontFamily: theme.fonts.sans,
+  },
+  docContent: {
+    padding: 20,
+    paddingTop: 64,
+    paddingBottom: 24,
+  },
+});
+
+const docMarkdownStyles = StyleSheet.create({
+  body: {
+    ...theme.typography.markdownBody,
+  },
+  strong: {
+    fontWeight: "700",
+    color: "rgba(0,0,0,0.90)",
+  },
+  em: {
+    fontStyle: "italic",
+  },
+  code_inline: {
+    ...theme.typography.markdownCodeInline,
+    fontFamily: theme.fonts.sans,
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    paddingHorizontal: 0,
+    borderRadius: 0,
+  },
+  code_block: {
+    ...theme.typography.markdownCodeBlock,
+    backgroundColor: theme.colors.codeBg,
+    borderRadius: theme.radii.codeBlock,
+    padding: 16,
+    marginVertical: 10,
+    fontFamily: theme.fonts.mono,
+  },
+  fence: {
+    ...theme.typography.markdownCodeBlock,
+    backgroundColor: theme.colors.codeBg,
+    borderRadius: theme.radii.codeBlock,
+    padding: 16,
+    marginVertical: 10,
+    fontFamily: theme.fonts.mono,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.03)",
+  },
+  paragraph: {
+    ...theme.typography.markdownParagraph,
+    marginBottom: 16,
+    marginTop: 0,
+  },
+  bullet_list: {
+    fontSize: theme.typography.markdownParagraph.fontSize,
+    marginBottom: 16,
+    paddingLeft: 4,
+  },
+  ordered_list: {
+    fontSize: theme.typography.markdownParagraph.fontSize,
+    marginBottom: 16,
+    paddingLeft: 4,
+  },
+  list_item: {
+    fontSize: theme.typography.markdownParagraph.fontSize,
+    marginBottom: 6,
+    flexDirection: "row",
+  },
+  blockquote: {
+    fontSize: theme.typography.markdownParagraph.fontSize,
+    borderLeftWidth: 3,
+    borderLeftColor: "rgba(0,0,0,0.08)",
+    paddingLeft: 16,
+    marginBottom: 16,
+    backgroundColor: "transparent",
+  },
+  heading1: {
+    ...theme.typography.markdownHeading1,
+    marginBottom: 8,
+    marginTop: 16,
+  },
+  heading2: {
+    ...theme.typography.markdownHeading2,
+    marginBottom: 6,
+    marginTop: 14,
+  },
+  heading3: {
+    ...theme.typography.markdownHeading3,
+    marginBottom: 4,
+    marginTop: 12,
+  },
+  link: {
+    color: theme.colors.blue,
+    textDecorationLine: "none",
+    fontSize: theme.typography.markdownBody.fontSize,
+  },
+  hr: {
+    backgroundColor: "rgba(0,0,0,0.06)",
+    height: StyleSheet.hairlineWidth,
+    marginVertical: 20,
   },
 });

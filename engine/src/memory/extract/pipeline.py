@@ -25,6 +25,22 @@ from pathlib import Path
 from parse_session import parse_session
 
 
+def get_embedding(text: str):
+    """Call Ollama to get an embedding. Returns bytes (float32 packed) or None if unavailable."""
+    try:
+        import requests
+        import struct
+        res = requests.post(
+            "http://localhost:11434/api/embed",
+            json={"model": "mxbai-embed-large", "input": text},
+            timeout=10
+        )
+        floats = res.json()["embeddings"][0]
+        return struct.pack(f"{len(floats)}f", *floats)
+    except Exception:
+        return None  # Ollama unavailable — memory stored without embedding, backfill later
+
+
 class RateLimitError(Exception):
     """Raised when the API returns a rate limit error."""
     pass
@@ -124,7 +140,7 @@ def run_extraction(conversation_text: str, prompt_template: str, max_retries: in
             input=full_prompt,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=300,
         )
 
         end = time.time()
@@ -243,9 +259,10 @@ def insert_memories(db_path: str, memories: list, source: str, created_at: int):
 
         mem_id = f"m_{uuid.uuid4().hex[:12]}"
 
+        embedding = get_embedding(content)
         cursor.execute(
-            "INSERT INTO memories (id, content, type, source, created_at) VALUES (?, ?, ?, ?, ?)",
-            (mem_id, content, mem_type, source, created_at),
+            "INSERT INTO memories (id, content, type, source, embedding, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (mem_id, content, mem_type, source, embedding, created_at),
         )
 
         # Sync to FTS5

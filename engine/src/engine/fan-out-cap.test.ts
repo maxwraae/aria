@@ -4,7 +4,7 @@ import {
   createObjective,
   updateStatus,
   getActiveChildCount,
-  MAX_CHILDREN,
+  getMaxChildren,
 } from "../db/queries.js";
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -33,7 +33,8 @@ function createTestDb(): Database.Database {
       fail_count INTEGER DEFAULT 0,
       created_at INTEGER,
       updated_at INTEGER,
-      resolved_at INTEGER
+      resolved_at INTEGER,
+      work_path TEXT
     );
 
     CREATE INDEX idx_status ON objectives(status);
@@ -112,7 +113,7 @@ describe("fan-out cap", () => {
     db.close();
   });
 
-  it("after 10 active children, count >= MAX_CHILDREN is true — cap would be enforced", () => {
+  it("after 10 active children, count >= getMaxChildren is true — cap would be enforced", () => {
     const db = createTestDb();
     const parent = createObjective(db, { objective: "parent" });
 
@@ -121,7 +122,7 @@ describe("fan-out cap", () => {
     }
 
     const count = getActiveChildCount(db, parent.id);
-    expect(count >= MAX_CHILDREN).toBe(true);
+    expect(count >= getMaxChildren()).toBe(true);
 
     db.close();
   });

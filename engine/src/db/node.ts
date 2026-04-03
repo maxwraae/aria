@@ -3,6 +3,7 @@ import path from 'path';
 
 const KNOWN_MACHINES: Record<string, string> = {
   'Maxs-Mac-mini': 'mini',
+  'Mac-mini': 'mini',
   'Macmini': 'mini',
   'Maxs-MacBook-Pro': 'macbook',
   'Mac': 'macbook',

@@ -82,6 +82,16 @@ The client can send a `watch_objective` message to subscribe to live streaming o
 
 The client can also send a `tts_request` message to synthesize speech. The request includes a `text` string and a `requestId` for correlation. The TTS module is initialized lazily and may not be available if the Kokoro model files aren't installed — in that case, the server sends a `tts_error` response. If TTS is available, `synthesizeStreaming` is called, which splits the text into segments, synthesizes each one to PCM16LE audio, and streams the chunks back as `tts_audio` messages with base64-encoded audio, the sample rate, and an `isLastChunk` flag.
 
+## Usage Tracking
+
+`GET /api/usage` returns a composite status object with three sections: raw usage data from the Claude API, the current window status, and the active settings.
+
+The usage data comes from `https://api.anthropic.com/api/oauth/usage`, authenticated with the OAuth token stored in the macOS keychain (or `~/.claude/.credentials.json` on other platforms). The response includes three buckets — the 5-hour session window, the 7-day weekly window, and the 7-day Sonnet-specific window — each with a utilization percentage and a `resets_at` timestamp. There's also an `extra_usage` section for overuse billing. Results are cached for 5 minutes in memory to avoid hammering the API; the Surface polls this endpoint every 60 seconds, so a single cache miss triggers one real fetch that serves the next ~5 polls.
+
+The window status section is computed by `getWindowStatus` in `server/usage.ts`. It reports which window we're currently in, the next window, whether the actual API reset time matches the expected one (sync detection), drift in hours, whether we're in online hours, and whether the weekly ceiling has been hit. This is the data the Surface uses to render the usage rings and the engine uses to make scheduling decisions. The full shape is documented in the `WindowStatus` interface.
+
+The Surface component (`UsageRings.tsx`) renders two concentric donut rings — outer for the 7-day weekly utilization, inner for the 5-hour session. Colors shift from calm grey (under 50%) to amber (50–75%) to red (over 75%). A hover tooltip shows exact percentages and time-until-reset for each bucket.
+
 ## Text-to-Speech
 
 The TTS layer in `server/tts.ts` wraps the Kokoro ONNX model via the `sherpa-onnx-node` native addon. It initializes once on first use (the `getTTS` singleton function) and returns `null` if the model files aren't present at `~/.paseo/models/local-speech/kokoro-en-v0_19`. This makes TTS entirely optional — the rest of the server operates normally without it.

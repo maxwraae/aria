@@ -11,6 +11,13 @@ export interface BrickContext {
   objectiveId: string | null;
   budget: number;
   config: Record<string, unknown>;
+  memoryEmbeddings?: {
+    message: number[] | null;
+    prevTurn: number[] | null;
+    objective: number[] | null;
+    parent: number[] | null;
+    work: number[] | null;
+  } | null;
 }
 
 export interface BrickMeta {
@@ -25,6 +32,8 @@ export interface BrickMeta {
   // Matched bricks
   matches?: Array<{ label: string; tokens: number; included: boolean }>;
   totalMatches?: number;
+  injectedIds?: string[];      // memory IDs injected this turn — for edge tracking
+  injectedCount?: number;
 
   // Flex (conversation)
   totalMessages?: number;

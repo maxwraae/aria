@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import type { Brick, BrickContext, BrickResult } from "../../types.js";
 import { getSiblings, getObjective, getConversation } from "../../../db/queries.js";
 import type { Objective } from "../../../db/queries.js";
@@ -45,6 +46,17 @@ function renderSiblingDetailed(db: Database.Database, sibling: Objective): strin
   if (sibling.description) {
     lines.push(``);
     lines.push(`> ${sibling.description}`);
+  }
+
+  if (sibling.work_path) {
+    try {
+      const workContent = readFileSync(sibling.work_path, "utf-8").trim();
+      if (workContent) {
+        lines.push(``);
+        lines.push(`**Work:**`);
+        lines.push(workContent);
+      }
+    } catch {}
   }
 
   const messages = getConversation(db, sibling.id, 5);
