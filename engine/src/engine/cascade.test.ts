@@ -6,6 +6,10 @@ import {
   resolveCascadeId,
   stampMessages,
   createTurn,
+  getCascadeTurnCount,
+  stopCascade,
+  getObjective,
+  updateStatus,
 } from "../db/queries.js";
 import { generateId } from "../db/utils.js";
 
@@ -35,7 +39,8 @@ function createTestDb(): Database.Database {
       fail_count INTEGER DEFAULT 0,
       created_at INTEGER,
       updated_at INTEGER,
-      resolved_at INTEGER
+      resolved_at INTEGER,
+      work_path TEXT
     );
 
     CREATE INDEX idx_status ON objectives(status);
@@ -68,6 +73,7 @@ function createTestDb(): Database.Database {
       turn_number INTEGER NOT NULL,
       user_message TEXT,
       session_id TEXT,
+      cascade_id TEXT,
       created_at INTEGER,
       FOREIGN KEY (objective_id) REFERENCES objectives(id)
     );
@@ -270,6 +276,84 @@ describe("cascade tracking", () => {
 
     expect(result.cascade_id).toBe(cascadeId);
     expect(result.turn_count).toBe(3);
+    db.close();
+  });
+
+  it("createTurn stores cascade_id on the turn record", () => {
+    const db = createTestDb();
+    const obj = createObjective(db, { objective: "test" });
+    const cascadeId = generateId();
+
+    const turn = createTurn(db, { objective_id: obj.id, cascade_id: cascadeId });
+    expect(turn.cascade_id).toBe(cascadeId);
+
+    const count = getCascadeTurnCount(db, cascadeId);
+    expect(count).toBe(1);
+    db.close();
+  });
+
+  it("getCascadeTurnCount counts turns across multiple objectives", () => {
+    const db = createTestDb();
+    const parent = createObjective(db, { objective: "parent" });
+    const child = createObjective(db, { objective: "child", parent: parent.id });
+    const cascadeId = generateId();
+
+    createTurn(db, { objective_id: parent.id, cascade_id: cascadeId });
+    createTurn(db, { objective_id: child.id, cascade_id: cascadeId });
+    createTurn(db, { objective_id: child.id, cascade_id: cascadeId });
+
+    expect(getCascadeTurnCount(db, cascadeId)).toBe(3);
+    db.close();
+  });
+
+  it("stopCascade stamps messages and sets objectives to stopped", () => {
+    const db = createTestDb();
+    const parent = createObjective(db, { objective: "parent" });
+    const child1 = createObjective(db, { objective: "child1", parent: parent.id });
+    const child2 = createObjective(db, { objective: "child2", parent: parent.id });
+    const cascadeId = generateId();
+
+    // Simulate unprocessed messages from this cascade
+    insertMessage(db, { objective_id: parent.id, message: "msg", sender: "system", cascade_id: cascadeId });
+    insertMessage(db, { objective_id: child1.id, message: "msg", sender: "system", cascade_id: cascadeId });
+    insertMessage(db, { objective_id: child2.id, message: "msg", sender: "system", cascade_id: cascadeId });
+
+    const stoppedIds = stopCascade(db, cascadeId);
+    expect(stoppedIds).toHaveLength(3);
+
+    // All objectives should be stopped
+    expect(getObjective(db, parent.id)?.status).toBe("stopped");
+    expect(getObjective(db, child1.id)?.status).toBe("stopped");
+    expect(getObjective(db, child2.id)?.status).toBe("stopped");
+
+    // All messages should be stamped
+    const unprocessed = db.prepare(
+      "SELECT COUNT(*) as count FROM inbox WHERE cascade_id = ? AND turn_id IS NULL"
+    ).get(cascadeId) as { count: number };
+    expect(unprocessed.count).toBe(0);
+
+    db.close();
+  });
+
+  it("stopCascade skips already resolved objectives", () => {
+    const db = createTestDb();
+    const parent = createObjective(db, { objective: "parent" });
+    const child = createObjective(db, { objective: "child", parent: parent.id });
+    const cascadeId = generateId();
+
+    // Child is already resolved
+    updateStatus(db, child.id, "resolved");
+
+    insertMessage(db, { objective_id: parent.id, message: "msg", sender: "system", cascade_id: cascadeId });
+    insertMessage(db, { objective_id: child.id, message: "msg", sender: "system", cascade_id: cascadeId });
+
+    const stoppedIds = stopCascade(db, cascadeId);
+    expect(stoppedIds).toHaveLength(1);
+    expect(stoppedIds[0]).toBe(parent.id);
+
+    // Child stays resolved
+    expect(getObjective(db, child.id)?.status).toBe("resolved");
+
     db.close();
   });
 });

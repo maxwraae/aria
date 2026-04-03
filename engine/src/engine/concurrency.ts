@@ -1,9 +1,8 @@
 import Database from "better-sqlite3";
 import { getThinkingCount, getLastMaxMessageTime, getDeepWorkCount } from "../db/queries.js";
 import { now } from "../db/utils.js";
+import { loadEngineConfig } from './engine-config.js';
 
-export const MAX_CONCURRENT_IDLE = 3;
-export const MAX_CONCURRENT_ACTIVE = 10;
 const MAX_ACTIVE_THRESHOLD = 15 * 60; // 15 minutes in seconds
 const DEEP_WORK_THRESHOLD = 5; // messages in window
 const DEEP_WORK_WINDOW = 300; // 5 minutes in seconds
@@ -71,15 +70,16 @@ export function getMaxActiveSet(db: Database.Database): Set<string> {
 }
 
 export function getConcurrencyLimit(maxActiveSet: Set<string>): number {
-  return maxActiveSet.size > 0 ? MAX_CONCURRENT_ACTIVE : MAX_CONCURRENT_IDLE;
+  const config = loadEngineConfig();
+  return maxActiveSet.size > 0 ? config.concurrency_active : config.concurrency_idle;
 }
 
 export function atConcurrencyLimit(db: Database.Database, machineId: string, cap?: number): boolean {
-  const limit = cap ?? MAX_CONCURRENT_IDLE;
+  const limit = cap ?? loadEngineConfig().concurrency_idle;
   return getThinkingCount(db, machineId) >= limit;
 }
 
 export function getAvailableSlots(db: Database.Database, machineId: string, cap?: number): number {
-  const limit = cap ?? MAX_CONCURRENT_IDLE;
+  const limit = cap ?? loadEngineConfig().concurrency_idle;
   return limit - getThinkingCount(db, machineId);
 }

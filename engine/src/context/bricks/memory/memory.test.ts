@@ -12,8 +12,8 @@ import path from "path";
 import { describe, it, expect } from "vitest";
 import Database from "better-sqlite3";
 import { initMemoryTables } from "../../../memory/schema.js";
-import { insertMemory, searchMemories } from "../../../memory/queries.js";
-import { buildFtsQuery, openMemoriesDb, MEMORIES_DB_PATH } from "./index.js";
+import { insertMemory, searchMemories, buildFtsQuery } from "../../../memory/queries.js";
+import { openMemoriesDb, MEMORIES_DB_PATH } from "./index.js";
 import memoryBrick from "./index.js";
 import type { BrickContext } from "../../types.js";
 import { assembleContext } from "../../assembler.js";
@@ -26,7 +26,19 @@ function makeEngineDb(objectiveId: string, objective: string): Database.Database
   db.exec(`
     CREATE TABLE objectives (
       id TEXT PRIMARY KEY,
-      objective TEXT NOT NULL
+      objective TEXT NOT NULL,
+      description TEXT,
+      parent TEXT,
+      work_path TEXT
+    );
+    CREATE TABLE inbox (
+      id TEXT PRIMARY KEY,
+      objective_id TEXT NOT NULL,
+      message TEXT NOT NULL,
+      sender TEXT NOT NULL,
+      type TEXT DEFAULT 'message',
+      turn_id TEXT,
+      created_at INTEGER NOT NULL
     );
   `);
   db.prepare("INSERT INTO objectives (id, objective) VALUES (?, ?)").run(objectiveId, objective);
@@ -60,8 +72,8 @@ describe("buildFtsQuery", () => {
     expect(buildFtsQuery("")).toBe("");
   });
 
-  it("filters short words (< 3 chars)", () => {
-    expect(buildFtsQuery("do it now")).toBe('"now"');
+  it("filters single-char words (keeps 2+ chars)", () => {
+    expect(buildFtsQuery("a it now")).toBe('"it" OR "now"');
   });
 
   it("strips punctuation and lower-cases", () => {
@@ -125,7 +137,7 @@ describe("memoryBrick render null guards", () => {
   });
 
   it("returns null when objective text is all short words (no valid FTS query)", () => {
-    const engineDb = makeEngineDb("obj-short", "do it go be");
+    const engineDb = makeEngineDb("obj-short", "a I x");
     const ctx: BrickContext = { db: engineDb, objectiveId: "obj-short", budget: 200_000, config: {} };
     expect(memoryBrick.render(ctx)).toBeNull();
   });

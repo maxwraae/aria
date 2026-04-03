@@ -22,11 +22,18 @@ import {
   clearWaitingOn,
   setResolutionSummary,
   PROTECTED_IDS,
+  syncInboxRow,
+  syncObjectiveRow,
+  syncTurnRow,
+  type Objective,
+  type InboxMessage,
+  type Turn,
 } from '../db/queries.js';
-import { subscribe, unsubscribe, type StreamCallback } from '../engine/streams.js';
+import { subscribe, unsubscribe, emit, type StreamCallback } from '../engine/streams.js';
 import { generateId } from '../db/utils.js';
 import { getTTS } from './tts.js';
 import { initPush, saveSubscription, removeSubscription, sendPushToAll } from './push.js';
+import { getUsage, getFullStatus } from './usage.js';
 
 // ── MIME types for static serving ─────────────────────────────────
 
@@ -125,8 +132,14 @@ export function startServer(
           return;
         }
         const children = getChildren(db, showParams.id);
+        let work: string | null = null;
+        if (obj.work_path) {
+          try {
+            work = fs.readFileSync(obj.work_path, "utf-8");
+          } catch {}
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ...obj, children }));
+        res.end(JSON.stringify({ ...obj, children, work }));
         return;
       }
 
@@ -179,7 +192,7 @@ export function startServer(
           objective,
           description: (body.description as string) ?? undefined,
           parent: (body.parent as string) ?? undefined,
-          model: (body.model as string) ?? ((body.parent as string) === 'quick' ? 'opus' : undefined),
+          model: (body.model as string) ?? (['quick', 'root'].includes(body.parent as string) ? 'opus' : undefined),
           machine: inheritedMachine,
         });
         // If instructions provided, send as first message
@@ -214,6 +227,13 @@ export function startServer(
           sender,
           cascade_id: generateId(),
         });
+        // Auto-resume stopped objectives when Max messages them
+        if (sender === 'max') {
+          const obj = getObjective(db, msgParams.id);
+          if (obj?.status === 'stopped') {
+            updateStatus(db, msgParams.id, 'idle');
+          }
+        }
         nudge?.();
         res.writeHead(201, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(msg));
@@ -610,6 +630,57 @@ export function startServer(
         return;
       }
 
+      // POST /api/sync — receive rows from worker
+      if (method === 'POST' && pathname === '/api/sync') {
+        const contentLength = parseInt(req.headers['content-length'] ?? '0', 10);
+        if (contentLength > 10 * 1024 * 1024) {
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Payload too large' }));
+          return;
+        }
+        const body = await parseBody(req);
+        const objectives = body.objectives as Objective[] | undefined;
+        const inbox = body.inbox as InboxMessage[] | undefined;
+        const turns = body.turns as Turn[] | undefined;
+
+        // Process in FK order: objectives first, then inbox, then turns
+        if (objectives) {
+          for (const row of objectives) syncObjectiveRow(db, row);
+        }
+        if (inbox) {
+          for (const row of inbox) syncInboxRow(db, row);
+        }
+        if (turns) {
+          for (const row of turns) syncTurnRow(db, row);
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      // POST /api/stream — receive streaming deltas from worker
+      if (method === 'POST' && pathname === '/api/stream') {
+        const body = await parseBody(req);
+        const objectiveId = body.objectiveId as string;
+        const text = body.text as string;
+        const done = body.done as boolean;
+        if (objectiveId !== undefined) {
+          emit(objectiveId, text ?? '', done ?? false);
+        }
+        res.writeHead(200);
+        res.end('ok');
+        return;
+      }
+
+      // GET /api/usage — Claude subscription utilization + window status
+      if (method === 'GET' && pathname === '/api/usage') {
+        const status = await getFullStatus();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(status));
+        return;
+      }
+
       // POST /api/upload
       if (method === 'POST' && pathname === '/api/upload') {
         const uploadsDir = path.join(os.homedir(), '.aria', 'uploads');
@@ -629,7 +700,7 @@ export function startServer(
       // GET /api/uploads/:filename
       if (method === 'GET' && pathname.startsWith('/api/uploads/')) {
         const uploadsDir = path.join(os.homedir(), '.aria', 'uploads');
-        const rawFilename = pathname.slice('/api/uploads/'.length);
+        const rawFilename = decodeURIComponent(pathname.slice('/api/uploads/'.length));
         const filename = rawFilename.replace(/[/\\]/g, '');
         const fullPath = path.join(uploadsDir, filename);
         try {

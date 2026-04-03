@@ -2,7 +2,11 @@
 
 {{OBJECTIVE}}
 
+{{ONGOING_NOTICE}}
+
 {{DESCRIPTION_SECTION}}
+
+{{WORK_SECTION}}
 
 ## Status
 

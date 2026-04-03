@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import type { Brick, BrickContext, BrickResult } from "../../types.js";
 import { getChildren, getConversation, getSubtreeStats } from "../../../db/queries.js";
 import type { Objective, SubtreeStats } from "../../../db/queries.js";
@@ -105,6 +106,18 @@ function renderChildDetailed(db: Database.Database, child: Objective, index: num
     parts.push(``);
     parts.push(`### Description`);
     parts.push(child.description);
+  }
+
+  // Work document section
+  if (child.work_path) {
+    try {
+      const workContent = readFileSync(child.work_path, "utf-8").trim();
+      if (workContent) {
+        parts.push(``);
+        parts.push(`### Work`);
+        parts.push(workContent);
+      }
+    } catch {}
   }
 
   // Grandchildren section

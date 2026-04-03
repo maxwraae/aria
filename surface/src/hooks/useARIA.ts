@@ -161,14 +161,18 @@ export function useARIA(): UseARIAReturn {
 
   const loadConversation = useCallback(async (id: string) => {
     try {
-      const res = await fetch(`/api/objectives/${id}/conversation`);
-      if (!res.ok) return;
-      const messages: InboxMessage[] = await res.json();
+      const [convRes, objRes] = await Promise.all([
+        fetch(`/api/objectives/${id}/conversation`),
+        fetch(`/api/objectives/${id}`),
+      ]);
+      if (!convRes.ok) return;
+      const messages: InboxMessage[] = await convRes.json();
+      const objData = objRes.ok ? await objRes.json() : null;
 
       const obj = objectivesRef.current.find(o => o.id === id);
       if (obj) {
         const session = toSession(obj, messages, objectivesRef.current);
-        sessionsRef.current.set(id, session);
+        sessionsRef.current.set(id, { ...session, work: objData?.work ?? null });
         setNeedsYou(toNeedsYouItems(objectivesRef.current, sessionsRef.current));
         setQuickItems(toQuickItems(objectivesRef.current, sessionsRef.current));
       }

@@ -22,12 +22,12 @@ import { generateId } from '../db/utils.js';
 import { parseInterval } from '../cli/parse-interval.js';
 import { getMaxActiveSet, getConcurrencyLimit, atConcurrencyLimit } from './concurrency.js';
 import { spawnTurn } from './spawn.js';
+import { probeConnectivity } from './probe.js';
+import { maybePing } from '../server/usage.js';
+import { loadEngineConfig } from './engine-config.js';
 
 const POLL_INTERVAL = 1000; // 1 second
-const STUCK_THRESHOLD = 30 * 60; // 30 minutes
-const MAX_FAIL_COUNT = 2;
 const PRUNE_INTERVAL = 60 * 60; // 1 hour between prune sweeps
-const STALE_THRESHOLD_DAYS = 14;
 const BACKUP_CHECK_INTERVAL = 60 * 60; // 1 hour between backup health checks
 const BACKUP_MAX_AGE_HOURS = 25;
 
@@ -81,7 +81,7 @@ export function startEngine(db: Database.Database): () => void {
     if (nowSeconds - lastPruneTime < PRUNE_INTERVAL) return;
     lastPruneTime = nowSeconds;
 
-    const thresholdSeconds = STALE_THRESHOLD_DAYS * 24 * 60 * 60;
+    const thresholdSeconds = loadEngineConfig().stale_threshold_days * 24 * 60 * 60;
     const staleIds = getStaleObjectives(db, thresholdSeconds);
     for (const id of staleIds) {
       updateStatus(db, id, 'abandoned');
@@ -143,7 +143,7 @@ export function startEngine(db: Database.Database): () => void {
 
     for (const obj of maxDirect) {
       console.log(`[engine] Spawning turn for ${obj.id.slice(0, 8)} "${obj.objective}" (max-direct, bypasses cap)`);
-      spawnTurn(db, obj.id);
+      spawnTurn(db, obj.id).catch(err => console.error(`[engine] spawnTurn error for ${obj.id.slice(0, 8)}:`, err));
     }
 
     autonomous.sort((a, b) => {
@@ -158,7 +158,7 @@ export function startEngine(db: Database.Database): () => void {
     for (const obj of autonomous) {
       if (atConcurrencyLimit(db, machineId, cap)) break;
       console.log(`[engine] Spawning turn for ${obj.id.slice(0, 8)} "${obj.objective}"`);
-      spawnTurn(db, obj.id);
+      spawnTurn(db, obj.id).catch(err => console.error(`[engine] spawnTurn error for ${obj.id.slice(0, 8)}:`, err));
     }
   }
 
@@ -166,6 +166,9 @@ export function startEngine(db: Database.Database): () => void {
     try {
       // Sync objectives, inbox, and turns from peer database
       syncFromPeer(db);
+
+      // 0. Ping to anchor 5h window (fires once per window start)
+      maybePing().catch(err => console.error('[engine] Ping error:', err));
 
       // 1. Fire any ready schedules
       fireReadySchedules();
@@ -179,41 +182,47 @@ export function startEngine(db: Database.Database): () => void {
       // 2. Process pending messages and spawn turns
       processQueue();
 
-      // 3. Recover stuck objectives (thinking > 30 min)
-      const stuck = getStuckObjectives(db, STUCK_THRESHOLD);
-      for (const obj of stuck) {
-        const failCount = incrementFailCount(db, obj.id);
-        if (failCount >= MAX_FAIL_COUNT) {
-          updateStatus(db, obj.id, 'needs-input');
-
-          // Fetch latest state to get last_error context
-          const latest = getObjective(db, obj.id);
-          const lastError = latest?.last_error ?? '';
-          const errorSnippet = lastError
-            ? lastError.slice(0, 300).replace(/\n/g, ' ').trim()
-            : 'No diagnostic info captured.';
-
-          insertMessage(db, {
-            objective_id: obj.id,
-            message: `[system] This objective has failed ${failCount} times and needs your attention.\n\nLast error: ${errorSnippet}`,
-            sender: 'system',
-            cascade_id: generateId(),
-          });
-          console.log(`[engine] ${obj.id.slice(0, 8)} stuck ${failCount} times, set to needs-input`);
-
-          // Notify Max via aria notify
-          try {
-            const shortId = obj.id.slice(0, 8);
-            const name = obj.objective.slice(0, 60);
-            const notifyMsg = `"${name}" (${shortId}) stuck after ${failCount} failures. ${errorSnippet.slice(0, 120)}`;
-            execSync(`aria notify ${JSON.stringify(notifyMsg)} --important --urgent`, { timeout: 10000 });
-            console.log(`[engine] Notified Max about stuck objective ${shortId}`);
-          } catch (notifyErr) {
-            console.error('[engine] aria notify failed:', notifyErr);
-          }
+      // 3. Recover stuck objectives (thinking > threshold)
+      const engineConfig = loadEngineConfig();
+      const stuck = getStuckObjectives(db, engineConfig.stuck_threshold_seconds);
+      if (stuck.length > 0) {
+        const alive = await probeConnectivity();
+        if (!alive) {
+          console.log(`[engine] ${stuck.length} stuck objective(s) but connection dead — deferring retry`);
         } else {
-          updateStatus(db, obj.id, 'idle');
-          console.log(`[engine] ${obj.id.slice(0, 8)} stuck, reset to idle (fail ${failCount}/${MAX_FAIL_COUNT})`);
+          for (const obj of stuck) {
+            const failCount = incrementFailCount(db, obj.id);
+            if (failCount >= engineConfig.max_fail_count) {
+              updateStatus(db, obj.id, 'needs-input');
+
+              const latest = getObjective(db, obj.id);
+              const lastError = latest?.last_error ?? '';
+              const errorSnippet = lastError
+                ? lastError.slice(0, 300).replace(/\n/g, ' ').trim()
+                : 'No diagnostic info captured.';
+
+              insertMessage(db, {
+                objective_id: obj.id,
+                message: `[system] This objective has failed ${failCount} times and needs your attention.\n\nLast error: ${errorSnippet}`,
+                sender: 'system',
+                cascade_id: generateId(),
+              });
+              console.log(`[engine] ${obj.id.slice(0, 8)} stuck ${failCount} times, set to needs-input`);
+
+              try {
+                const shortId = obj.id.slice(0, 8);
+                const name = obj.objective.slice(0, 60);
+                const notifyMsg = `"${name}" (${shortId}) stuck after ${failCount} failures. ${errorSnippet.slice(0, 120)}`;
+                execSync(`aria notify ${JSON.stringify(notifyMsg)} --important --urgent`, { timeout: 10000 });
+                console.log(`[engine] Notified Max about stuck objective ${shortId}`);
+              } catch (notifyErr) {
+                console.error('[engine] aria notify failed:', notifyErr);
+              }
+            } else {
+              updateStatus(db, obj.id, 'idle');
+              console.log(`[engine] ${obj.id.slice(0, 8)} stuck, reset to idle (fail ${failCount}/${engineConfig.max_fail_count})`);
+            }
+          }
         }
       }
     } catch (err) {

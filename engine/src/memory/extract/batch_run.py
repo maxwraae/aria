@@ -17,6 +17,8 @@ from pipeline import chunk_conversation, run_extraction, insert_memories, load_p
 
 STATE_FILE = Path(__file__).parent / "batch_state.json"
 
+ALL_TYPES = ["world", "preference", "biology", "people", "max", "friction"]
+
 
 def save_state(state: dict, path: Path):
     tmp = path.with_suffix('.tmp')
@@ -27,7 +29,16 @@ def save_state(state: dict, path: Path):
 def load_state(path: Path) -> dict:
     if path.exists():
         try:
-            return json.loads(path.read_text())
+            raw = json.loads(path.read_text())
+            # Migrate old flat format: {"session.jsonl": {"status": "done", ...}}
+            # to per-type format: {"session.jsonl": {"world": {"status": "done", ...}}}
+            processed = raw.get("processed", {})
+            for filename, entry in processed.items():
+                if isinstance(entry, dict) and "status" in entry:
+                    # Old flat format — wrap as world
+                    processed[filename] = {"world": entry}
+            raw["processed"] = processed
+            return raw
         except (json.JSONDecodeError, OSError):
             pass
     return {
@@ -35,6 +46,54 @@ def load_state(path: Path) -> dict:
         "started_at": datetime.now().isoformat(),
         "last_updated": datetime.now().isoformat(),
     }
+
+
+def discover_sessions() -> list:
+    """Discover all session .jsonl files from archive and live directories.
+
+    Returns list of absolute path strings, deduplicated by basename (newest mtime wins),
+    sorted by mtime descending (newest first).
+    """
+    archive_root = Path("/Users/maxwraae/Library/Mobile Documents/com~apple~CloudDocs/claude/.claude-archive")
+    live_dir = Path.home() / ".claude/projects/-Users-maxwraae"
+
+    EXCLUDE_DIRS = {"subagents", "node_modules", ".venv"}
+
+    # Collect all candidates: {basename: (path, mtime)}
+    candidates = {}
+
+    # Archive: recursive scan, exclude certain dirs
+    if archive_root.exists():
+        for p in archive_root.rglob("*.jsonl"):
+            # Check if any path component is in EXCLUDE_DIRS
+            parts = set(p.parts)
+            if parts & EXCLUDE_DIRS:
+                continue
+            # Also check relative parts more carefully
+            skip = False
+            for part in p.relative_to(archive_root).parts[:-1]:  # exclude filename itself
+                if part in EXCLUDE_DIRS:
+                    skip = True
+                    break
+            if skip:
+                continue
+
+            basename = p.name
+            mtime = p.stat().st_mtime
+            if basename not in candidates or mtime > candidates[basename][1]:
+                candidates[basename] = (str(p), mtime)
+
+    # Live: top-level only
+    if live_dir.exists():
+        for p in live_dir.glob("*.jsonl"):
+            basename = p.name
+            mtime = p.stat().st_mtime
+            if basename not in candidates or mtime > candidates[basename][1]:
+                candidates[basename] = (str(p), mtime)
+
+    # Sort by mtime descending (newest first)
+    sorted_paths = sorted(candidates.values(), key=lambda x: x[1], reverse=True)
+    return [path for path, _mtime in sorted_paths]
 
 
 def process_session(session_path: str, prompt_template: str, db_path: str, prompt_type: str) -> dict:
@@ -101,13 +160,15 @@ def process_session(session_path: str, prompt_template: str, db_path: str, promp
 def main():
     parser = argparse.ArgumentParser(description="Batch runner for Aria memory extraction across all sessions")
     parser.add_argument("--parallel", type=int, default=2, help="Max concurrent sessions (default: 2)")
-    parser.add_argument("--type", default="world", choices=["world", "preference", "both"],
+    parser.add_argument("--type", default="world", choices=ALL_TYPES,
                         help="Extraction type (default: world)")
     parser.add_argument("--db", default=str(Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/Aria/data/memories.db"),
                         help="SQLite database path (default: Aria's memories.db)")
     parser.add_argument("--limit", type=int, default=None, help="Process only first N sessions (for testing)")
     parser.add_argument("--retry-errors", action="store_true", help="Re-process sessions that previously errored")
     args = parser.parse_args()
+
+    prompt_type = args.type
 
     # Load state
     state = load_state(STATE_FILE)
@@ -116,52 +177,54 @@ def main():
     if "started_at" not in state:
         state["started_at"] = datetime.now().isoformat()
 
-    # Discover sessions
-    sessions_dir = Path.home() / ".claude/projects/-Users-maxwraae"
-    session_files = sorted(glob.glob(str(sessions_dir / "*.jsonl")), key=os.path.getmtime)
+    # Discover sessions (newest first)
+    all_session_files = discover_sessions()
 
+    # Apply limit before filtering (limit is applied to the full sorted list, then we filter)
     if args.limit:
-        session_files = session_files[:args.limit]
+        # We want up to --limit sessions to actually process, but we need to scan all to find them.
+        # Strategy: filter first, then limit.
+        pass
 
-    # Filter already processed
+    # Filter already processed for this type
     sessions_to_process = []
     already_done = 0
-    for path in session_files:
+    for path in all_session_files:
         filename = os.path.basename(path)
-        existing = state["processed"].get(filename)
-        if existing is None:
+        session_entry = state["processed"].get(filename, {})
+        type_entry = session_entry.get(prompt_type)
+
+        if type_entry is None:
             sessions_to_process.append(path)
-        elif existing.get("status") in ("done", "skipped"):
+        elif type_entry.get("status") in ("done", "skipped"):
             already_done += 1
-        elif existing.get("status") == "error":
+        elif type_entry.get("status") == "error":
             if args.retry_errors:
                 sessions_to_process.append(path)
             else:
                 already_done += 1
+        else:
+            sessions_to_process.append(path)
 
-    if already_done > 0:
-        print(f"Resuming: {already_done} sessions already processed, {len(sessions_to_process)} remaining", file=sys.stderr)
+    total_found = len(all_session_files)
+    to_process_count = len(sessions_to_process)
+
+    # Apply limit after filtering
+    if args.limit:
+        sessions_to_process = sessions_to_process[:args.limit]
+
+    print(f"Sessions found: {total_found} total, {already_done} already done for '{prompt_type}', {to_process_count} to process", file=sys.stderr)
+    if args.limit and args.limit < to_process_count:
+        print(f"  (limited to {args.limit} by --limit)", file=sys.stderr)
 
     if not sessions_to_process:
         print("No sessions to process.", file=sys.stderr)
         return
 
-    # Determine prompt type
-    if args.type == "world":
-        prompt_key = "world"
-        prompt_type = "world"
-    elif args.type == "preference":
-        prompt_key = "preference"
-        prompt_type = "preference"
-    else:
-        # "both" — default to world for batch mode
-        prompt_key = "world"
-        prompt_type = "world"
-
     # Load prompt once before the pool
-    prompt_template = load_prompt(prompt_key)
+    prompt_template = load_prompt(prompt_type)
 
-    print(f"Processing {len(sessions_to_process)} sessions (parallel={args.parallel}, type={args.type}, db={args.db})", file=sys.stderr)
+    print(f"Processing {len(sessions_to_process)} sessions (parallel={args.parallel}, type={prompt_type}, db={args.db})", file=sys.stderr)
 
     # Process sessions with ThreadPoolExecutor at session level
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel) as pool:
@@ -184,7 +247,10 @@ def main():
             except Exception as e:
                 result = {"status": "error", "error": str(e)}
 
-            state["processed"][filename] = result
+            # Per-type state update
+            if filename not in state["processed"]:
+                state["processed"][filename] = {}
+            state["processed"][filename][prompt_type] = result
             state["last_updated"] = datetime.now().isoformat()
             save_state(state, STATE_FILE)
 

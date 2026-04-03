@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 
 import { initDb } from '../db/schema.js';
-import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation, createSchedule, listSchedules, getTreeUnified, getObjectiveUnified, getConversationUnified, getChildrenUnified, PROTECTED_IDS, checkDepthCap, MAX_AUTONOMOUS_DEPTH, getActiveChildCount, MAX_CHILDREN } from '../db/queries.js';
+import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation, createSchedule, listSchedules, getTreeUnified, getObjectiveUnified, getConversationUnified, getChildrenUnified, PROTECTED_IDS, checkDepthCap, getMaxAutonomousDepth, getActiveChildCount, getMaxChildren } from '../db/queries.js';
+import { loadEngineConfig } from '../engine/engine-config.js';
 import { generateId } from '../db/utils.js';
 import { startEngine } from '../engine/loop.js';
+import { startEmbedDaemon } from '../memory/embed-daemon.js';
 import { startServer } from '../server/index.js';
 import { isDeepWork } from '../engine/concurrency.js';
+import { isWorker } from '../db/node.js';
 import { initPush, sendPushToAll } from '../server/push.js';
 import { validateCreate, validateSucceed, validateFail, validateReject, validateWait, validateTell, validateNotify } from '../commands/registry.js';
 import type { Objective, InboxMessage } from '../db/queries.js';
@@ -87,26 +90,23 @@ aria - objective engine for Max
 Usage: aria <command> [args...]
 
 Commands:
-  create "desired state" ["instructions"]                Create a child objective
+  spawn-child "objective" "description" "message"       Create a child objective
+  report-to-parent "message"                             Report result to your parent
+  resolve-child <id> succeed "summary"                   Resolve a child as done
+  resolve-child <id> fail "reason"                       Fail a child objective
+  talk-to-child <id> "message"                           Send feedback to a child (resets to idle)
+  talk <id> "message"                                    Send message to any objective
+  notify-max "message" --important --urgent              Notify Max directly
+  wait "reason"                                          Park until something external arrives
   tree                                                   Show objective tree
   show <id>                                              Show one objective
-  send <id> "message"                                    Send message to objective's inbox
   inbox <id>                                             Show conversation for objective
-  succeed <id> "summary"                                 Resolve a child objective (summary required)
-  fail <id> "reason"                                     Fail a child objective (reason required)
-  reject <id> "feedback"                                 Reject a child objective with feedback (retry)
-  wait "reason"                                          Set current objective to waiting
-  tell <id> "message"                                    Send message to any objective
-  notify "message" --important/--not-important --urgent/--not-urgent  Notify Max directly
-  schedule <id> "message" --interval <interval>           Create a schedule (5s, 1m, 1h, 1d)
-  schedules [objective_id]                               List active schedules
   find "query"                                           Search objectives
-  engine                                                 Start the engine
-  dev                                                    Start engine + surface (development)
-  up                                                     Start engine with built surface (production)
-  context [objective_id] [--dump|--tui]                   Print assembled context
-  sim --objective "..." [--message "..."]                 Run loop against ephemeral scenario (no persistence)
-  sim --scenario path.json                                Run loop from scenario file
+  schedule <id> "message" --interval <interval>          Schedule recurring message
+  schedules [id]                                         List active schedules
+
+Aliases (backward compat):
+  create, succeed, fail, reject, tell, notify, send
 
 Options:
   --help                                                 Show this help message
@@ -211,6 +211,15 @@ function cmdShow(id: string): void {
     if (obj.description) {
       console.log(`Description: ${obj.description}`);
     }
+    if (obj.work_path) {
+      try {
+        const workContent = fs.readFileSync(obj.work_path, "utf-8").trim();
+        if (workContent) {
+          console.log(`\nWork document:`);
+          console.log(workContent);
+        }
+      } catch {}
+    }
     if (obj.waiting_on) {
       console.log(`Waiting on:  ${obj.waiting_on}`);
     }
@@ -239,7 +248,11 @@ function cmdCreate(rawArgs: string[]): void {
     process.exit(1);
   }
 
-  const instructions = positional[1] ?? null;
+  // 3-arg form: aria spawn-child "obj" "desc" "msg"
+  // 2-arg form: aria create "obj" "instructions" (backward compat: instructions → both description and inbox)
+  const hasThreeArgs = positional.length >= 3;
+  const description = positional[1] ?? null;
+  const instructions = hasThreeArgs ? (positional[2] ?? null) : (positional[1] ?? null);
   const parentId = process.env.ARIA_OBJECTIVE_ID ?? 'root';
   const model = (flags['model'] as string) ?? 'sonnet';
 
@@ -257,14 +270,15 @@ function cmdCreate(rawArgs: string[]): void {
   if (process.env.ARIA_OBJECTIVE_ID) {
     const { allowed, autonomousDepth } = checkDepthCap(db, parentId);
     if (!allowed) {
-      console.error(`Maximum autonomous depth reached (${autonomousDepth} >= ${MAX_AUTONOMOUS_DEPTH}). Report to your parent instead of decomposing further.`);
+      console.error(`Maximum autonomous depth reached (${autonomousDepth} >= ${getMaxAutonomousDepth()}). Report to your parent instead of decomposing further.`);
       db.close();
       process.exit(1);
     }
 
     const childCount = getActiveChildCount(db, parentId);
-    if (childCount >= MAX_CHILDREN) {
-      console.error(`Maximum children reached (${childCount} >= ${MAX_CHILDREN}). Resolve, fail, or rethink existing children before creating more.`);
+    const maxChildren = getMaxChildren();
+    if (childCount >= maxChildren) {
+      console.error(`Maximum children reached (${childCount} >= ${maxChildren}). Resolve, fail, or rethink existing children before creating more.`);
       db.close();
       process.exit(1);
     }
@@ -272,6 +286,7 @@ function cmdCreate(rawArgs: string[]): void {
 
   const newObj = createObjective(db, {
     objective: objectiveText,
+    description: description ?? undefined,
     parent: parentId,
     model,
     machine: parent.machine ?? undefined,
@@ -330,6 +345,11 @@ function cmdSend(rawArgs: string[]): void {
     sender: 'max',
     cascade_id: generateId(),
   });
+
+  // Auto-resume stopped objectives when Max messages them
+  if (obj.status === 'stopped') {
+    updateStatus(db, id, 'idle');
+  }
 
   if (isTTY) {
     const shortId = id.slice(0, 8);
@@ -934,6 +954,70 @@ function cmdSchedules(rawArgs: string[]): void {
   db.close();
 }
 
+function cmdReportToParent(rawArgs: string[]): void {
+  const message = rawArgs[0];
+  const id = process.env.ARIA_OBJECTIVE_ID;
+
+  if (!id) {
+    console.error('report-to-parent requires ARIA_OBJECTIVE_ID');
+    process.exit(1);
+  }
+  if (!message) {
+    console.error('Usage: aria report-to-parent "message"');
+    process.exit(1);
+  }
+
+  const db = initDb();
+  const obj = getObjective(db, id);
+  if (!obj) {
+    console.error(`Objective not found: ${id}`);
+    db.close();
+    process.exit(1);
+  }
+  if (!obj.parent) {
+    console.error('This objective has no parent');
+    db.close();
+    process.exit(1);
+  }
+
+  const cascadeId = process.env.ARIA_CASCADE_ID || undefined;
+  insertMessage(db, {
+    objective_id: obj.parent,
+    message,
+    sender: id,
+    cascade_id: cascadeId,
+  });
+
+  if (isTTY) {
+    const shortId = obj.parent.slice(0, 8);
+    console.log(`Reported to parent ${color.cyan(shortId)}`);
+  } else {
+    console.log(JSON.stringify({ parent: obj.parent, message }, null, 2));
+  }
+
+  db.close();
+}
+
+function cmdResolveChild(rawArgs: string[]): void {
+  const id = rawArgs[0];
+  const action = rawArgs[1]; // 'succeed' or 'fail'
+  const text = rawArgs[2];   // summary or reason
+
+  if (!id || !action || !text) {
+    console.error('Usage: aria resolve-child <id> succeed "summary"  OR  aria resolve-child <id> fail "reason"');
+    process.exit(1);
+  }
+
+  if (action === 'succeed') {
+    cmdSucceed([id, text]);
+  } else if (action === 'fail') {
+    cmdFail([id, text]);
+  } else {
+    console.error(`Unknown action: ${action}. Use "succeed" or "fail".`);
+    process.exit(1);
+  }
+}
+
 // ── Dispatch ──────────────────────────────────────────────────────
 
 const command = process.argv[2];
@@ -958,6 +1042,10 @@ switch (command) {
     break;
 
   case 'create':
+    cmdCreate(args);
+    break;
+
+  case 'spawn-child':
     cmdCreate(args);
     break;
 
@@ -991,6 +1079,26 @@ switch (command) {
 
   case 'notify':
     cmdNotify(args);
+    break;
+
+  case 'notify-max':
+    cmdNotify(args);
+    break;
+
+  case 'report-to-parent':
+    cmdReportToParent(args);
+    break;
+
+  case 'resolve-child':
+    cmdResolveChild(args);
+    break;
+
+  case 'talk-to-child':
+    cmdReject(args);
+    break;
+
+  case 'talk':
+    cmdTell(args);
     break;
 
   case 'schedule':
@@ -1077,7 +1185,8 @@ switch (command) {
   case 'engine': {
     const engineDb = initDb();
     const nudge = startEngine(engineDb);
-    const surfaceDist = decodeURIComponent(new URL('../../../surface/dist', import.meta.url).pathname);
+    startEmbedDaemon();
+    const surfaceDist = isWorker() ? null : decodeURIComponent(new URL('../../../surface/dist', import.meta.url).pathname);
     const server = startServer(engineDb, surfaceDist, undefined, nudge);
     process.on('SIGINT', () => {
       console.log('\n[engine] Shutting down...');

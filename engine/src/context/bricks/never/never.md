@@ -21,3 +21,11 @@ No `brew install`, `npm install -g`, `pip install`, or any system-level package 
 
 ## Never spawn background agents
 If you need anything done, spawn a child to do it.
+
+## Never edit another objective's work document
+
+Your work document path is in your objective context. That is the only work file you may edit. You will see the content of parent, sibling, and children work documents in your context — those are read-only. Do not edit them.
+
+## Never edit objective or description fields
+
+You cannot change your own objective or description, or anyone else's. These are set at creation and are immutable. If you think your objective is wrong, tell your parent.

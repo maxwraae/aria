@@ -124,3 +124,101 @@ export function countMemoriesByType(db: Database.Database): MemoryTypeCount[] {
     "SELECT type, COUNT(*) as count FROM memories GROUP BY type ORDER BY count DESC"
   ).all() as MemoryTypeCount[];
 }
+
+// ── V2 retrieval ───────────────────────────────────────────────────
+
+const STOP_WORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'been',
+  'are', 'was', 'were', 'will', 'would', 'could', 'should', 'can',
+  'not', 'but', 'what', 'when', 'where', 'how', 'who', 'which',
+  'their', 'there', 'then', 'than', 'them', 'they', 'some', 'also',
+  'into', 'about', 'just', 'more', 'other', 'your', 'our', 'his',
+  'her', 'its', 'has', 'had', 'does', 'did', 'doing', 'being',
+  'all', 'any', 'each', 'every', 'both', 'few', 'most', 'own',
+  'you', 'she', 'him', 'out', 'over', 'very', 'only',
+]);
+
+export function buildFtsQuery(text: string): string {
+  const words = text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 2 && !STOP_WORDS.has(w));
+
+  if (words.length === 0) return "";
+
+  const escaped = words.slice(0, 12).map((w) => `"${w.replace(/"/g, '""')}"`);
+  return escaped.join(" OR ");
+}
+
+export interface BM25Result {
+  id: string;
+  content: string;
+  type: string;
+  created_at: number;
+  rank: number;
+}
+
+export function searchBM25(
+  db: Database.Database,
+  query: string,
+  limit: number = 20
+): BM25Result[] {
+  const results = db.prepare(`
+    SELECT m.id, m.content, m.type, m.created_at
+    FROM memories m
+    JOIN memories_fts fts ON fts.rowid = m.rowid
+    WHERE memories_fts MATCH ?
+    ORDER BY bm25(memories_fts) ASC
+    LIMIT ?
+  `).all(query, limit) as Omit<BM25Result, 'rank'>[];
+
+  return results.map((r, i) => ({ ...r, rank: i + 1 }));
+}
+
+export interface MemoryEdge {
+  memory_a: string;
+  memory_b: string;
+  count: number;
+  last_turn: number;
+}
+
+export function incrementEdges(db: Database.Database, memoryIds: string[]): void {
+  const now = Math.floor(Date.now() / 1000);
+  const upsert = db.prepare(`
+    INSERT INTO memory_edges (memory_a, memory_b, count, last_turn, created_at)
+    VALUES (?, ?, 1, ?, ?)
+    ON CONFLICT(memory_a, memory_b)
+    DO UPDATE SET count = count + 1, last_turn = excluded.last_turn
+  `);
+
+  const run = db.transaction(() => {
+    for (let i = 0; i < memoryIds.length; i++) {
+      for (let j = i + 1; j < memoryIds.length; j++) {
+        const [a, b] = memoryIds[i] < memoryIds[j]
+          ? [memoryIds[i], memoryIds[j]]
+          : [memoryIds[j], memoryIds[i]];
+        upsert.run(a, b, now, now);
+      }
+    }
+  });
+  run();
+}
+
+export function getTopEdges(
+  db: Database.Database,
+  memoryId: string,
+  limit: number = 20
+): MemoryEdge[] {
+  return db.prepare(`
+    SELECT * FROM memory_edges
+    WHERE memory_a = ? OR memory_b = ?
+    ORDER BY count DESC
+    LIMIT ?
+  `).all(memoryId, memoryId, limit) as MemoryEdge[];
+}
+
+export function getMemoryById(db: Database.Database, id: string): Memory | null {
+  return stmt(db, "getMemoryById", "SELECT * FROM memories WHERE id = ?")
+    .get(id) as Memory | null;
+}

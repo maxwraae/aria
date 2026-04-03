@@ -56,7 +56,8 @@ function createTestDb(): Database.Database {
       fail_count INTEGER DEFAULT 0,
       created_at INTEGER,
       updated_at INTEGER,
-      resolved_at INTEGER
+      resolved_at INTEGER,
+      work_path TEXT
     );
 
     CREATE INDEX idx_status ON objectives(status);
@@ -231,10 +232,10 @@ describe("Context assembly integration", () => {
     expect(s.content).toContain("Never delete files");
   });
 
-  it("focus restates objective with two questions", () => {
+  it("focus restates objective and includes work document path", () => {
     const s = result.sections.find((s) => s.name === "FOCUS")!;
     expect(s.content).toContain("Draft the statement of purpose");
-    expect(s.content).toContain("Do I have the knowledge to act?");
+    expect(s.content).toContain("update your work document");
   });
 
   it("memory brick renders when memories.db exists", () => {

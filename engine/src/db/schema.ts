@@ -13,7 +13,7 @@ export function initDb(dbPath?: string): Database.Database {
   fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
 
   const db = new Database(resolvedPath);
-  db.pragma("journal_mode = DELETE");
+  db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
 
   db.exec(`
@@ -69,6 +69,26 @@ export function initDb(dbPath?: string): Database.Database {
     `);
   }
 
+  // Migration: add work_path column if missing
+  if (!cols.some((c) => c.name === "work_path")) {
+    db.exec("ALTER TABLE objectives ADD COLUMN work_path TEXT");
+  }
+
+  // Backfill: create work files for existing objectives without one
+  const needsWorkPath = db.prepare("SELECT id FROM objectives WHERE work_path IS NULL").all() as { id: string }[];
+  if (needsWorkPath.length > 0) {
+    const workDir = path.join(DB_DIR, "work");
+    fs.mkdirSync(workDir, { recursive: true });
+    const updateStmt = db.prepare("UPDATE objectives SET work_path = ? WHERE id = ?");
+    for (const { id } of needsWorkPath) {
+      const workPath = path.join(workDir, `${id}.md`);
+      if (!fs.existsSync(workPath)) {
+        fs.writeFileSync(workPath, "", "utf-8");
+      }
+      updateStmt.run(workPath, id);
+    }
+  }
+
   // FTS5 virtual tables don't support IF NOT EXISTS, so check manually
   const ftsExists = db
     .prepare(
@@ -104,6 +124,7 @@ export function initDb(dbPath?: string): Database.Database {
       user_message TEXT,
       session_id TEXT,
       created_at INTEGER,
+      injected_memory_ids TEXT,
       FOREIGN KEY (objective_id) REFERENCES objectives(id)
     );
 
@@ -138,6 +159,17 @@ export function initDb(dbPath?: string): Database.Database {
   // Migration: add cascade_id column to inbox if missing
   if (!inboxCols.some(c => c.name === 'cascade_id')) {
     db.exec(`ALTER TABLE inbox ADD COLUMN cascade_id TEXT`);
+  }
+
+  // Migration: add injected_memory_ids column to turns if missing
+  const turnCols = db.prepare(`PRAGMA table_info(turns)`).all() as Array<{name: string}>;
+  if (!turnCols.some(c => c.name === 'injected_memory_ids')) {
+    db.exec(`ALTER TABLE turns ADD COLUMN injected_memory_ids TEXT`);
+  }
+
+  // Migration: add cascade_id column to turns if missing
+  if (!turnCols.some(c => c.name === 'cascade_id')) {
+    db.exec(`ALTER TABLE turns ADD COLUMN cascade_id TEXT`);
   }
 
   // Seed root objective if it doesn't exist

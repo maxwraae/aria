@@ -318,6 +318,25 @@ Every subsequent message in the chain inherits the cascade_id. When the engine s
 
 ---
 
+### 16. Bounce Detector
+
+**Rule:** If two objectives exchange 5+ messages within 30 minutes with no Max message to either in that window, the routing is blocked and the child is set to `needs-input`.
+
+**How it works:** In `output.ts`, before routing a reply back to the sender that triggered this turn, `isBouncing()` counts messages between the pair in the last 30 minutes. If >= 5 and no Max message to either objective in the window, the reply is not routed. The current objective is set to `needs-input` with a system message.
+
+**What resets it:** Max messaging either objective. The count is messages, not round-trips (5 messages ≈ 2.5 round-trips).
+
+**Source:** `engine/src/db/queries.ts` (isBouncing), `engine/src/engine/output.ts` (check before routing)
+
+**Test:** `src/engine/bounce-detector.test.ts`
+- 4 exchanges in window → not bouncing
+- 5 exchanges in window → bouncing, routing blocked
+- 5 exchanges + Max message → not bouncing (Max resets)
+- 5 exchanges outside 30-min window → not bouncing
+- Independent pairs evaluated separately
+
+---
+
 ## CLI Commands
 
 Every command an agent can use during a turn. All verified via `src/engine/cli-commands.test.ts`.
