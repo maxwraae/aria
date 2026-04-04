@@ -344,16 +344,18 @@ export function processOutput(
 
       for (const { sender } of triggeredMessages) {
         const senderObj = getObjective(db, sender);
-        // Never auto-reply downward — only route back to parent/siblings, not children
-        if (senderObj && senderObj.parent !== objectiveId) {
-          insertMessage(db, {
-            objective_id: sender,
-            message: fullOutput,
-            sender: objectiveId,
-            type: "reply",
-            cascade_id: cascadeId,
-          });
-        }
+        if (!senderObj) continue;
+        // No auto-reply to objectives at a lower depth (higher in the tree).
+        // If the sender is above you, use report-to-parent or talk explicitly.
+        const myDepth = obj?.depth ?? 0;
+        if (senderObj.depth < myDepth) continue;
+        insertMessage(db, {
+          objective_id: sender,
+          message: fullOutput,
+          sender: objectiveId,
+          type: "reply",
+          cascade_id: cascadeId,
+        });
       }
     }
 

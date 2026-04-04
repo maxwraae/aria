@@ -27,8 +27,8 @@ export function initMemoryTables(db: Database.Database): void {
     );
   }
 
-  // WAL mode for safe concurrent reads/writes
-  db.pragma("journal_mode = WAL");
+  // Note: journal_mode is set by openDb() / migrateDb() — do not override here.
+  // Mini.db uses DELETE journal mode for iCloud sync compatibility.
 
   // Co-occurrence graph for contextuality
   db.exec(`

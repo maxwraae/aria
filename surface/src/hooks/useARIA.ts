@@ -162,7 +162,7 @@ export function useARIA(): UseARIAReturn {
   const loadConversation = useCallback(async (id: string) => {
     try {
       const [convRes, objRes] = await Promise.all([
-        fetch(`/api/objectives/${id}/conversation`),
+        fetch(`/api/objectives/${id}/conversation?limit=500`),
         fetch(`/api/objectives/${id}`),
       ]);
       if (!convRes.ok) return;

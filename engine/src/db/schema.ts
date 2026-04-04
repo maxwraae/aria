@@ -8,13 +8,65 @@ import { initMemoryTables } from "../memory/schema.js";
 export const DB_DIR = getDataDir();
 export const DB_PATH = getLocalDbPath();
 
-export function initDb(dbPath?: string): Database.Database {
+/**
+ * Open a database connection. No migrations, no schema changes.
+ * Safe to call from any code path — reads or writes.
+ *
+ * Pass readonly=true for read-only commands (aria tree, aria active, etc.)
+ * so they don't conflict with the engine's write lock under DELETE journal mode.
+ */
+export function openDb(dbPath?: string, readonly = false): Database.Database {
   const resolvedPath = dbPath ?? DB_PATH;
-  fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+  if (!readonly) {
+    fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+  }
 
-  const db = new Database(resolvedPath);
-  db.pragma("journal_mode = WAL");
+  const db = new Database(resolvedPath, readonly ? { readonly: true } : undefined);
   db.pragma("foreign_keys = ON");
+  if (!readonly) {
+    db.pragma("busy_timeout = 5000");
+    // Enforce DELETE journal mode on every writable connection.
+    // iCloud can sync in an older WAL-mode version of the DB between restarts,
+    // which strands the engine with a 0-byte WAL and SQLITE_IOERR_SHORT_READ errors.
+    // Setting DELETE here is idempotent — no-op if already in DELETE mode.
+    db.pragma("journal_mode = DELETE");
+  }
+
+  return db;
+}
+
+/** Open a read-only connection. For CLI read commands. */
+export function openDbReadonly(dbPath?: string): Database.Database {
+  return openDb(dbPath, true);
+}
+
+/**
+ * Retry a database operation on transient I/O errors (SQLITE_IOERR_SHORT_READ).
+ * These happen under DELETE journal mode when reading while the engine is mid-write.
+ */
+export function withRetry<T>(fn: () => T, maxRetries = 3, delayMs = 100): T {
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      return fn();
+    } catch (err: any) {
+      if (i < maxRetries && err?.code?.startsWith?.('SQLITE_IOERR')) {
+        const waitMs = delayMs * (i + 1);
+        const start = Date.now();
+        while (Date.now() - start < waitMs) {} // sync sleep
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('unreachable');
+}
+
+/**
+ * Run schema migrations on an open database handle.
+ * Called once at engine startup (`aria up`). Idempotent — safe to re-run.
+ */
+export function migrateDb(db: Database.Database): void {
+  db.pragma("journal_mode = DELETE");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS objectives (
@@ -39,26 +91,23 @@ export function initDb(dbPath?: string): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_parent ON objectives(parent);
   `);
 
-  // Migration: add resolution_summary column if missing
+  // Column migrations — idempotent checks protect against re-runs
   const cols = db.pragma("table_info(objectives)") as { name: string }[];
+
   if (!cols.some((c) => c.name === "resolution_summary")) {
     db.exec("ALTER TABLE objectives ADD COLUMN resolution_summary TEXT");
   }
 
-  // Migration: add machine column if missing
   if (!cols.some((c) => c.name === "machine")) {
     db.exec("ALTER TABLE objectives ADD COLUMN machine TEXT");
   }
 
-  // Migration: add last_error column if missing
   if (!cols.some((c) => c.name === "last_error")) {
     db.exec("ALTER TABLE objectives ADD COLUMN last_error TEXT");
   }
 
-  // Migration: add depth column if missing
   if (!cols.some((c) => c.name === "depth")) {
     db.exec("ALTER TABLE objectives ADD COLUMN depth INTEGER DEFAULT 0");
-    // Backfill depth for existing objectives using recursive CTE
     db.exec(`
       WITH RECURSIVE tree AS (
         SELECT id, 0 AS d FROM objectives WHERE parent IS NULL
@@ -69,27 +118,29 @@ export function initDb(dbPath?: string): Database.Database {
     `);
   }
 
-  // Migration: add work_path column if missing
   if (!cols.some((c) => c.name === "work_path")) {
     db.exec("ALTER TABLE objectives ADD COLUMN work_path TEXT");
   }
 
-  // Backfill: create work files for existing objectives without one
+  // Backfill work files for objectives without one
   const needsWorkPath = db.prepare("SELECT id FROM objectives WHERE work_path IS NULL").all() as { id: string }[];
   if (needsWorkPath.length > 0) {
     const workDir = path.join(DB_DIR, "work");
     fs.mkdirSync(workDir, { recursive: true });
     const updateStmt = db.prepare("UPDATE objectives SET work_path = ? WHERE id = ?");
-    for (const { id } of needsWorkPath) {
-      const workPath = path.join(workDir, `${id}.md`);
-      if (!fs.existsSync(workPath)) {
-        fs.writeFileSync(workPath, "", "utf-8");
+    const backfill = db.transaction(() => {
+      for (const { id } of needsWorkPath) {
+        const workPath = path.join(workDir, `${id}.md`);
+        if (!fs.existsSync(workPath)) {
+          fs.writeFileSync(workPath, "", "utf-8");
+        }
+        updateStmt.run(workPath, id);
       }
-      updateStmt.run(workPath, id);
-    }
+    });
+    backfill();
   }
 
-  // FTS5 virtual tables don't support IF NOT EXISTS, so check manually
+  // FTS5 virtual tables don't support IF NOT EXISTS
   const ftsExists = db
     .prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='objectives_fts'"
@@ -150,66 +201,64 @@ export function initDb(dbPath?: string): Database.Database {
     );
   `);
 
-  // Migration: add processed_by column to inbox if missing
+  // Inbox column migrations
   const inboxCols = db.prepare(`PRAGMA table_info(inbox)`).all() as Array<{name: string}>;
   if (!inboxCols.some(c => c.name === 'processed_by')) {
     db.exec(`ALTER TABLE inbox ADD COLUMN processed_by TEXT`);
   }
-
-  // Migration: add cascade_id column to inbox if missing
   if (!inboxCols.some(c => c.name === 'cascade_id')) {
     db.exec(`ALTER TABLE inbox ADD COLUMN cascade_id TEXT`);
   }
 
-  // Migration: add injected_memory_ids column to turns if missing
+  // Turns column migrations
   const turnCols = db.prepare(`PRAGMA table_info(turns)`).all() as Array<{name: string}>;
   if (!turnCols.some(c => c.name === 'injected_memory_ids')) {
     db.exec(`ALTER TABLE turns ADD COLUMN injected_memory_ids TEXT`);
   }
-
-  // Migration: add cascade_id column to turns if missing
   if (!turnCols.some(c => c.name === 'cascade_id')) {
     db.exec(`ALTER TABLE turns ADD COLUMN cascade_id TEXT`);
   }
 
-  // Seed root objective if it doesn't exist
+  // Seed root objective
   const root = db
     .prepare("SELECT id FROM objectives WHERE id = 'root'")
     .get();
   if (!root) {
     const ts = now();
-    db.prepare(
-      `INSERT INTO objectives (id, objective, parent, status, created_at, updated_at)
-       VALUES ('root', 'Help Max thrive and succeed', NULL, 'idle', ?, ?)`
-    ).run(ts, ts);
-    db.prepare(
-      `INSERT INTO objectives_fts(rowid, objective, waiting_on, description, resolution_summary)
-       SELECT rowid, objective, waiting_on, description, resolution_summary FROM objectives WHERE id = 'root'`
-    ).run();
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO objectives (id, objective, parent, status, created_at, updated_at)
+         VALUES ('root', 'Help Max thrive and succeed', NULL, 'idle', ?, ?)`
+      ).run(ts, ts);
+      db.prepare(
+        `INSERT INTO objectives_fts(rowid, objective, waiting_on, description, resolution_summary)
+         SELECT rowid, objective, waiting_on, description, resolution_summary FROM objectives WHERE id = 'root'`
+      ).run();
+    })();
     console.log("Seeded root objective");
   }
 
-  // Seed quick objective if it doesn't exist
+  // Seed quick objective
   const quick = db
     .prepare("SELECT id FROM objectives WHERE id = 'quick'")
     .get();
   if (!quick) {
     const ts = now();
-    db.prepare(
-      `INSERT INTO objectives (id, objective, description, parent, status, created_at, updated_at)
-       VALUES ('quick', 'Quick tasks', 'Catch-all for quick tasks from the search bar. This objective is permanent and protected.', 'root', 'idle', ?, ?)`
-    ).run(ts, ts);
-    db.prepare(
-      `INSERT INTO objectives_fts(rowid, objective, waiting_on, description, resolution_summary)
-       SELECT rowid, objective, waiting_on, description, resolution_summary FROM objectives WHERE id = 'quick'`
-    ).run();
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO objectives (id, objective, description, parent, status, created_at, updated_at)
+         VALUES ('quick', 'Quick tasks', 'Catch-all for quick tasks from the search bar. This objective is permanent and protected.', 'root', 'idle', ?, ?)`
+      ).run(ts, ts);
+      db.prepare(
+        `INSERT INTO objectives_fts(rowid, objective, waiting_on, description, resolution_summary)
+         SELECT rowid, objective, waiting_on, description, resolution_summary FROM objectives WHERE id = 'quick'`
+      ).run();
+    })();
     console.log("Seeded quick objective");
   }
 
   // Initialize memory tables
   initMemoryTables(db);
-
-  return db;
 }
 
 // Run directly
@@ -218,6 +267,7 @@ const isMain =
   (process.argv[1].endsWith("schema.ts") ||
     process.argv[1].endsWith("schema.js"));
 if (isMain) {
-  const db = initDb();
+  const db = openDb();
+  migrateDb(db);
   db.close();
 }

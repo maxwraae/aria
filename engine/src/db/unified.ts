@@ -37,6 +37,24 @@ export function isPeerAvailable(): boolean {
  * The callback receives whether peer is available.
  */
 export function withPeer<T>(db: Database.Database, fn: (hasPeer: boolean) => T): T {
+  // Readonly connections can't ATTACH — skip peer, retry on transient I/O errors
+  if (db.readonly) {
+    for (let attempt = 0; attempt <= 3; attempt++) {
+      try {
+        return fn(false);
+      } catch (err: any) {
+        if (attempt < 3 && err?.code?.startsWith?.('SQLITE_IOERR')) {
+          const waitMs = 100 * (attempt + 1);
+          const start = Date.now();
+          while (Date.now() - start < waitMs) {} // sync wait
+          continue;
+        }
+        throw err;
+      }
+    }
+    return fn(false); // unreachable
+  }
+
   const now = Date.now();
   if (!peerAvailable && now - lastPeerCheck < PEER_CHECK_INTERVAL) {
     return fn(false);
@@ -46,6 +64,14 @@ export function withPeer<T>(db: Database.Database, fn: (hasPeer: boolean) => T):
   const hasPeer = attachPeer(db);
   try {
     return fn(hasPeer);
+  } catch (err) {
+    // If a peer query fails (e.g. iCloud corruption), retry local-only
+    if (hasPeer) {
+      try { db.exec('DETACH DATABASE peer'); } catch {}
+      peerAvailable = false;
+      return fn(false);
+    }
+    throw err;
   } finally {
     if (hasPeer) {
       try { db.exec('DETACH DATABASE peer'); } catch {}
