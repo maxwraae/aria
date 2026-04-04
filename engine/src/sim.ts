@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
-import { initDb } from './db/schema.js';
+import { openDb, migrateDb } from './db/schema.js';
 import { createObjective, insertMessage, getObjective, getChildren } from './db/queries.js';
 import { generateId } from './db/utils.js';
 import { spawnTurn } from './engine/spawn.js';
@@ -147,7 +147,8 @@ export async function runSim(args: string[]): Promise<void> {
   const tempPath = `/tmp/aria-sim-${Date.now()}.db`;
   process.env.ARIA_DB = tempPath;
 
-  const db = initDb(tempPath);
+  const db = openDb(tempPath);
+  migrateDb(db);
 
   try {
     // Create test objective under root

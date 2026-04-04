@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { initDb } from '../db/schema.js';
+import { openDb, openDbReadonly, migrateDb } from '../db/schema.js';
 import { getTree, getObjective, getChildren, createObjective, insertMessage, getConversation, updateStatus, cascadeAbandon, setWaitingOn, clearWaitingOn, setResolutionSummary, searchObjectives, getSenderRelation, createSchedule, listSchedules, getTreeUnified, getObjectiveUnified, getConversationUnified, getChildrenUnified, PROTECTED_IDS, checkDepthCap, getMaxAutonomousDepth, getActiveChildCount, getMaxChildren } from '../db/queries.js';
+import { withPeer } from '../db/unified.js';
 import { loadEngineConfig } from '../engine/engine-config.js';
 import { generateId } from '../db/utils.js';
 import { startEngine } from '../engine/loop.js';
@@ -105,6 +106,20 @@ Commands:
   schedule <id> "message" --interval <interval>          Schedule recurring message
   schedules [id]                                         List active schedules
 
+Monitoring & Debug:
+  active                                                 Objectives currently thinking
+  alive                                                  All non-terminal objectives
+  recent                                                 15 most recently updated objectives
+  unprocessed                                            Inbox messages not yet picked up
+  stuck                                                  Failing or idle-too-long objectives
+  errors                                                 Objectives with errors
+  waiting                                                Objectives parked on something
+  cascade [cascade_id]                                   Trace a cascade chain
+  stats                                                  Counts by status, turns, messages
+  today                                                  Objectives updated today
+  children <id>                                          Children of an objective
+  history <id>                                           Turn history for an objective
+
 Aliases (backward compat):
   create, succeed, fail, reject, tell, notify, send
 
@@ -172,7 +187,7 @@ function formatTimestamp(ts: number): string {
 // ── Commands ──────────────────────────────────────────────────────
 
 function cmdTree(): void {
-  const db = initDb();
+  const db = openDbReadonly();
   const objectives = getTreeUnified(db);
   const tree = buildTree(objectives);
 
@@ -191,7 +206,7 @@ function cmdShow(id: string): void {
     process.exit(1);
   }
 
-  const db = initDb();
+  const db = openDbReadonly();
   const obj = getObjectiveUnified(db, id);
 
   if (!obj) {
@@ -256,7 +271,7 @@ function cmdCreate(rawArgs: string[]): void {
   const parentId = process.env.ARIA_OBJECTIVE_ID ?? 'root';
   const model = (flags['model'] as string) ?? 'sonnet';
 
-  const db = initDb();
+  const db = openDb();
 
   // Verify parent exists
   const parent = getObjective(db, parentId);
@@ -330,7 +345,7 @@ function cmdSend(rawArgs: string[]): void {
     process.exit(1);
   }
 
-  const db = initDb();
+  const db = openDb();
   const obj = getObjective(db, id);
 
   if (!obj) {
@@ -375,7 +390,7 @@ function cmdInbox(rawArgs: string[]): void {
 
   const limit = flags['limit'] ? parseInt(flags['limit'] as string, 10) : 50;
 
-  const db = initDb();
+  const db = openDbReadonly();
   const obj = getObjectiveUnified(db, id);
 
   if (!obj) {
@@ -418,7 +433,7 @@ function cmdSucceed(rawArgs: string[]): void {
   const summary = rawArgs[1];
   const callerId = process.env.ARIA_OBJECTIVE_ID;
 
-  const db = initDb();
+  const db = openDb();
   const error = validateSucceed(db, targetId, summary, callerId);
   if (error) {
     console.error(error);
@@ -483,7 +498,7 @@ function cmdFail(rawArgs: string[]): void {
   const reason = rawArgs[1];
   const callerId = process.env.ARIA_OBJECTIVE_ID;
 
-  const db = initDb();
+  const db = openDb();
   const error = validateFail(db, targetId, reason, callerId);
   if (error) {
     console.error(error);
@@ -530,7 +545,7 @@ function cmdReject(rawArgs: string[]): void {
   const feedback = rawArgs[1];
   const callerId = process.env.ARIA_OBJECTIVE_ID;
 
-  const db = initDb();
+  const db = openDb();
   const error = validateReject(db, targetId, feedback, callerId);
   if (error) {
     console.error(error);
@@ -576,7 +591,7 @@ function cmdWait(rawArgs: string[]): void {
     process.exit(1);
   }
 
-  const db = initDb();
+  const db = openDb();
   const obj = getObjective(db, id!);
 
   if (!obj) {
@@ -606,7 +621,7 @@ function cmdTell(rawArgs: string[]): void {
   const targetId = rawArgs[0];
   const message = rawArgs[1];
 
-  const db = initDb();
+  const db = openDb();
   const error = validateTell(db, targetId, message);
   if (error) {
     console.error(error);
@@ -651,16 +666,17 @@ function cmdNotify(rawArgs: string[]): void {
   const important = 'important' in flags;
   const urgent = 'urgent' in flags;
 
-  const db = initDb();
+  const db = openDb();
+  const objectiveId = process.env.ARIA_OBJECTIVE_ID;
 
-  const cascadeId = process.env.ARIA_CASCADE_ID || undefined;
-  insertMessage(db, {
-    objective_id: 'root',
-    message: '[notify] ' + message,
-    sender: process.env.ARIA_OBJECTIVE_ID ?? 'system',
-    type: 'signal',
-    cascade_id: cascadeId,
-  });
+  // Set the calling objective to needs-input with important/urgent flags.
+  // This makes it show up in the "needs you" list on the surface.
+  // No message to root — notify is a flag, not a conversation.
+  if (objectiveId) {
+    updateStatus(db, objectiveId, 'needs-input');
+    db.prepare('UPDATE objectives SET important = ?, urgent = ? WHERE id = ?')
+      .run(important ? 1 : 0, urgent ? 1 : 0, objectiveId);
+  }
 
   // Always print to stdout (this is a notification)
   const markers = [
@@ -716,7 +732,7 @@ function cmdFind(rawArgs: string[]): void {
     process.exit(1);
   }
 
-  const db = initDb();
+  const db = openDbReadonly();
   const results = searchObjectives(db, query);
 
   if (results.length === 0) {
@@ -751,7 +767,7 @@ function cmdContext(rawArgs: string[]): void {
 
   if (objectiveId) {
     // Objective-specific context
-    const db = initDb();
+    const db = openDbReadonly();
     const obj = getObjective(db, objectiveId);
     if (!obj) {
       console.error(`Objective not found: ${objectiveId}`);
@@ -886,7 +902,7 @@ function cmdSchedule(rawArgs: string[]): void {
     process.exit(1);
   }
 
-  const db = initDb();
+  const db = openDb();
   const obj = getObjective(db, objectiveId);
   if (!obj) {
     console.error(`Objective not found: ${objectiveId}`);
@@ -922,7 +938,7 @@ function cmdSchedule(rawArgs: string[]): void {
 function cmdSchedules(rawArgs: string[]): void {
   const objectiveId = rawArgs[0] || undefined;
 
-  const db = initDb();
+  const db = openDbReadonly();
 
   if (objectiveId) {
     const obj = getObjective(db, objectiveId);
@@ -967,7 +983,7 @@ function cmdReportToParent(rawArgs: string[]): void {
     process.exit(1);
   }
 
-  const db = initDb();
+  const db = openDb();
   const obj = getObjective(db, id);
   if (!obj) {
     console.error(`Objective not found: ${id}`);
@@ -1016,6 +1032,267 @@ function cmdResolveChild(rawArgs: string[]): void {
     console.error(`Unknown action: ${action}. Use "succeed" or "fail".`);
     process.exit(1);
   }
+}
+
+// ── Monitoring & Debug Commands ───────────────────────────────────
+
+function trunc(s: string | null | undefined, len: number): string {
+  if (!s) return '';
+  return s.length > len ? s.slice(0, len) + '...' : s;
+}
+
+function cmdActive(): void {
+  const db = openDbReadonly();
+  const rows = withPeer(db, (hasPeer) => {
+    const local = `SELECT id, objective, machine, model, datetime(updated_at/1000,'unixepoch','localtime') as updated FROM objectives WHERE status = 'thinking'`;
+    if (!hasPeer) return db.prepare(local).all();
+    const peer = `SELECT id, objective, machine, model, datetime(updated_at/1000,'unixepoch','localtime') as updated FROM peer.objectives WHERE status = 'thinking' AND id NOT IN (SELECT id FROM objectives WHERE status = 'thinking')`;
+    return db.prepare(`${local} UNION ALL ${peer}`).all();
+  }) as any[];
+
+  if (!isTTY) { console.log(JSON.stringify(rows, null, 2)); db.close(); return; }
+  if (rows.length === 0) { console.log(color.dim('No active (thinking) objectives.')); db.close(); return; }
+  for (const r of rows) {
+    console.log(`${color.cyan(r.id.slice(0, 8))}  ${trunc(r.objective, 50)}  ${color.yellow('[thinking]')}  ${color.dim(r.machine ?? '?')}  ${color.dim(r.model ?? '')}  ${color.dim(r.updated)}`);
+  }
+  db.close();
+}
+
+function cmdAlive(): void {
+  const db = openDbReadonly();
+  const rows = withPeer(db, (hasPeer) => {
+    const local = `SELECT * FROM objectives WHERE status NOT IN ('resolved','failed','abandoned')`;
+    if (!hasPeer) return db.prepare(`${local} ORDER BY updated_at DESC LIMIT 20`).all();
+    const peer = `SELECT * FROM peer.objectives WHERE status NOT IN ('resolved','failed','abandoned') AND id NOT IN (SELECT id FROM objectives)`;
+    return db.prepare(`SELECT * FROM (${local} UNION ALL ${peer}) ORDER BY updated_at DESC LIMIT 20`).all();
+  }) as Objective[];
+
+  if (!isTTY) { console.log(JSON.stringify(rows.map(r => ({ id: r.id, objective: r.objective, status: r.status, machine: r.machine, waiting_on: r.waiting_on })), null, 2)); db.close(); return; }
+  if (rows.length === 0) { console.log(color.dim('No alive objectives.')); db.close(); return; }
+  for (const r of rows) {
+    console.log(`${color.cyan(r.id.slice(0, 8))}  ${trunc(r.objective, 50)}  ${colorStatus(r.status)}  ${color.dim(r.machine ?? '')}  ${r.waiting_on ? color.magenta(trunc(r.waiting_on, 50)) : ''}`);
+  }
+  db.close();
+}
+
+function cmdRecent(): void {
+  const db = openDbReadonly();
+  const rows = withPeer(db, (hasPeer) => {
+    const local = `SELECT id, objective, status, datetime(updated_at/1000,'unixepoch','localtime') as updated, updated_at FROM objectives`;
+    if (!hasPeer) return db.prepare(`${local} ORDER BY updated_at DESC LIMIT 15`).all();
+    const peer = `SELECT id, objective, status, datetime(updated_at/1000,'unixepoch','localtime') as updated, updated_at FROM peer.objectives WHERE id NOT IN (SELECT id FROM objectives)`;
+    return db.prepare(`SELECT * FROM (${local} UNION ALL ${peer}) ORDER BY updated_at DESC LIMIT 15`).all();
+  }) as any[];
+
+  if (!isTTY) { console.log(JSON.stringify(rows, null, 2)); db.close(); return; }
+  if (rows.length === 0) { console.log(color.dim('No objectives.')); db.close(); return; }
+  for (const r of rows) {
+    console.log(`${color.cyan(r.id.slice(0, 8))}  ${trunc(r.objective, 50)}  ${colorStatus(r.status)}  ${color.dim(r.updated)}`);
+  }
+  db.close();
+}
+
+function cmdUnprocessed(): void {
+  const db = openDbReadonly();
+  const rows = withPeer(db, (hasPeer) => {
+    const local = `SELECT i.objective_id, i.sender, i.type, i.message, datetime(i.created_at/1000,'unixepoch','localtime') as created FROM inbox i WHERE i.turn_id IS NULL ORDER BY i.created_at DESC LIMIT 20`;
+    if (!hasPeer) return db.prepare(local).all();
+    const localAll = `SELECT i.objective_id, i.sender, i.type, i.message, datetime(i.created_at/1000,'unixepoch','localtime') as created, i.created_at as sort_ts FROM inbox i WHERE i.turn_id IS NULL`;
+    const peerAll = `SELECT i.objective_id, i.sender, i.type, i.message, datetime(i.created_at/1000,'unixepoch','localtime') as created, i.created_at as sort_ts FROM peer.inbox i WHERE i.turn_id IS NULL AND i.id NOT IN (SELECT id FROM inbox)`;
+    return db.prepare(`SELECT objective_id, sender, type, message, created FROM (${localAll} UNION ALL ${peerAll}) ORDER BY sort_ts DESC LIMIT 20`).all();
+  }) as any[];
+
+  if (!isTTY) { console.log(JSON.stringify(rows, null, 2)); db.close(); return; }
+  if (rows.length === 0) { console.log(color.dim('No unprocessed messages.')); db.close(); return; }
+  for (const r of rows) {
+    console.log(`${color.cyan((r.objective_id ?? '').slice(0, 8))}  ${color.yellow(r.sender)}  ${color.dim(r.type)}  ${trunc(r.message, 60)}  ${color.dim(r.created)}`);
+  }
+  db.close();
+}
+
+function cmdStuck(): void {
+  const db = openDbReadonly();
+  const rows = withPeer(db, (hasPeer) => {
+    const local = `SELECT id, objective, status, fail_count, last_error, updated_at, datetime(updated_at/1000,'unixepoch','localtime') as updated FROM objectives
+      WHERE status NOT IN ('resolved','failed','abandoned')
+        AND (fail_count > 0 OR (status = 'idle' AND updated_at < (strftime('%s','now') - 86400) * 1000))`;
+    if (!hasPeer) return db.prepare(`${local} ORDER BY fail_count DESC, updated_at ASC`).all();
+    const peer = `SELECT id, objective, status, fail_count, last_error, updated_at, datetime(updated_at/1000,'unixepoch','localtime') as updated FROM peer.objectives
+      WHERE status NOT IN ('resolved','failed','abandoned')
+        AND (fail_count > 0 OR (status = 'idle' AND updated_at < (strftime('%s','now') - 86400) * 1000))
+        AND id NOT IN (SELECT id FROM objectives)`;
+    return db.prepare(`SELECT id, objective, status, fail_count, last_error, updated FROM (${local} UNION ALL ${peer}) ORDER BY fail_count DESC, updated_at ASC`).all();
+  }) as any[];
+
+  if (!isTTY) { console.log(JSON.stringify(rows, null, 2)); db.close(); return; }
+  if (rows.length === 0) { console.log(color.dim('No stuck objectives.')); db.close(); return; }
+  for (const r of rows) {
+    console.log(`${color.cyan(r.id.slice(0, 8))}  ${trunc(r.objective, 50)}  ${colorStatus(r.status)}  ${r.fail_count > 0 ? color.red(`fails:${r.fail_count}`) : ''}  ${r.last_error ? color.red(trunc(r.last_error, 60)) : ''}`);
+  }
+  db.close();
+}
+
+function cmdErrors(): void {
+  const db = openDbReadonly();
+  const rows = withPeer(db, (hasPeer) => {
+    const sql = `SELECT id, objective, status, fail_count, last_error FROM objectives WHERE last_error IS NOT NULL OR fail_count > 0 ORDER BY updated_at DESC LIMIT 15`;
+    if (!hasPeer) return db.prepare(sql).all();
+    const localSql = `SELECT id, objective, status, fail_count, last_error, updated_at FROM objectives WHERE last_error IS NOT NULL OR fail_count > 0`;
+    const peerSql = `SELECT id, objective, status, fail_count, last_error, updated_at FROM peer.objectives WHERE (last_error IS NOT NULL OR fail_count > 0) AND id NOT IN (SELECT id FROM objectives)`;
+    return db.prepare(`SELECT id, objective, status, fail_count, last_error FROM (${localSql} UNION ALL ${peerSql}) ORDER BY updated_at DESC LIMIT 15`).all();
+  }) as any[];
+
+  if (!isTTY) { console.log(JSON.stringify(rows, null, 2)); db.close(); return; }
+  if (rows.length === 0) { console.log(color.dim('No errors.')); db.close(); return; }
+  for (const r of rows) {
+    console.log(`${color.cyan(r.id.slice(0, 8))}  ${trunc(r.objective, 40)}  ${colorStatus(r.status)}  ${r.fail_count > 0 ? color.red(`fails:${r.fail_count}`) : ''}  ${r.last_error ? color.red(trunc(r.last_error, 80)) : ''}`);
+  }
+  db.close();
+}
+
+function cmdWaiting(): void {
+  const db = openDbReadonly();
+  const rows = withPeer(db, (hasPeer) => {
+    const local = `SELECT id, objective, waiting_on, updated_at FROM objectives WHERE waiting_on IS NOT NULL AND waiting_on != '' AND status NOT IN ('resolved','failed','abandoned')`;
+    if (!hasPeer) return db.prepare(`${local} ORDER BY updated_at DESC`).all();
+    const peer = `SELECT id, objective, waiting_on, updated_at FROM peer.objectives WHERE waiting_on IS NOT NULL AND waiting_on != '' AND status NOT IN ('resolved','failed','abandoned') AND id NOT IN (SELECT id FROM objectives)`;
+    return db.prepare(`SELECT id, objective, waiting_on FROM (${local} UNION ALL ${peer}) ORDER BY updated_at DESC`).all();
+  }) as any[];
+
+  if (!isTTY) { console.log(JSON.stringify(rows, null, 2)); db.close(); return; }
+  if (rows.length === 0) { console.log(color.dim('No waiting objectives.')); db.close(); return; }
+  for (const r of rows) {
+    console.log(`${color.cyan(r.id.slice(0, 8))}  ${trunc(r.objective, 40)}  ${color.magenta(trunc(r.waiting_on, 80))}`);
+  }
+  db.close();
+}
+
+function cmdCascade(rawArgs: string[]): void {
+  const cascadeId = rawArgs[0];
+  const db = openDbReadonly();
+
+  if (!cascadeId) {
+    // List recent cascade IDs
+    const rows = withPeer(db, (hasPeer) => {
+      const localSql = `SELECT DISTINCT cascade_id, datetime(created_at/1000,'unixepoch','localtime') as started, created_at FROM inbox WHERE cascade_id IS NOT NULL`;
+      if (!hasPeer) return db.prepare(`SELECT cascade_id, started FROM (${localSql}) ORDER BY created_at DESC LIMIT 10`).all();
+      const peerSql = `SELECT DISTINCT cascade_id, datetime(created_at/1000,'unixepoch','localtime') as started, created_at FROM peer.inbox WHERE cascade_id IS NOT NULL`;
+      return db.prepare(`SELECT cascade_id, MAX(started) as started FROM (${localSql} UNION ALL ${peerSql}) GROUP BY cascade_id ORDER BY MAX(created_at) DESC LIMIT 10`).all();
+    }) as any[];
+
+    if (!isTTY) { console.log(JSON.stringify(rows, null, 2)); db.close(); return; }
+    if (rows.length === 0) { console.log(color.dim('No cascades found.')); db.close(); return; }
+    console.log(color.dim('Recent cascades:'));
+    for (const r of rows) {
+      console.log(`  ${color.cyan(r.cascade_id)}  ${color.dim(r.started)}`);
+    }
+    db.close();
+    return;
+  }
+
+  const rows = withPeer(db, (hasPeer) => {
+    const localSql = `SELECT objective_id, sender, type, message, datetime(created_at/1000,'unixepoch','localtime') as ts, created_at as sort_ts FROM inbox WHERE cascade_id = ?`;
+    if (!hasPeer) return db.prepare(`SELECT objective_id, sender, type, message, ts FROM (${localSql}) ORDER BY sort_ts`).all(cascadeId);
+    const peerSql = `SELECT objective_id, sender, type, message, datetime(created_at/1000,'unixepoch','localtime') as ts, created_at as sort_ts FROM peer.inbox WHERE cascade_id = ? AND id NOT IN (SELECT id FROM inbox WHERE cascade_id = ?)`;
+    return db.prepare(`SELECT objective_id, sender, type, message, ts FROM (${localSql} UNION ALL ${peerSql}) ORDER BY sort_ts`).all(cascadeId, cascadeId, cascadeId);
+  }) as any[];
+
+  if (!isTTY) { console.log(JSON.stringify(rows, null, 2)); db.close(); return; }
+  if (rows.length === 0) { console.log(color.dim('No messages in this cascade.')); db.close(); return; }
+  for (const r of rows) {
+    console.log(`${color.cyan((r.objective_id ?? '').slice(0, 8))}  ${color.yellow(r.sender)}  ${color.dim(r.type)}  ${trunc(r.message, 60)}  ${color.dim(r.ts)}`);
+  }
+  db.close();
+}
+
+function cmdStats(): void {
+  const db = openDbReadonly();
+  const statusCounts = withPeer(db, (hasPeer) => {
+    if (!hasPeer) return db.prepare(`SELECT status, count(*) as count FROM objectives GROUP BY status ORDER BY count DESC`).all();
+    // Deduplicated count
+    return db.prepare(`SELECT status, count(*) as count FROM (
+      SELECT id, status FROM objectives
+      UNION ALL
+      SELECT id, status FROM peer.objectives WHERE id NOT IN (SELECT id FROM objectives)
+    ) GROUP BY status ORDER BY count DESC`).all();
+  }) as any[];
+
+  const turnCount = withPeer(db, (hasPeer) => {
+    if (!hasPeer) return (db.prepare(`SELECT count(*) as count FROM turns`).get() as any).count;
+    return (db.prepare(`SELECT count(*) as count FROM (
+      SELECT id FROM turns UNION ALL SELECT id FROM peer.turns WHERE id NOT IN (SELECT id FROM turns)
+    )`).get() as any).count;
+  }) as number;
+
+  const inboxCount = withPeer(db, (hasPeer) => {
+    if (!hasPeer) return (db.prepare(`SELECT count(*) as count FROM inbox`).get() as any).count;
+    return (db.prepare(`SELECT count(*) as count FROM (
+      SELECT id FROM inbox UNION ALL SELECT id FROM peer.inbox WHERE id NOT IN (SELECT id FROM inbox)
+    )`).get() as any).count;
+  }) as number;
+
+  if (!isTTY) { console.log(JSON.stringify({ statuses: statusCounts, turns: turnCount, inbox_messages: inboxCount }, null, 2)); db.close(); return; }
+  console.log(color.cyan('Objectives by status:'));
+  for (const r of statusCounts) {
+    console.log(`  ${colorStatus(r.status)}  ${r.count}`);
+  }
+  console.log(`\n  Turns:          ${turnCount}`);
+  console.log(`  Inbox messages: ${inboxCount}`);
+  db.close();
+}
+
+function cmdToday(): void {
+  const db = openDbReadonly();
+  const rows = withPeer(db, (hasPeer) => {
+    const sql = `SELECT id, objective, status, datetime(updated_at/1000,'unixepoch','localtime') as updated, updated_at FROM objectives WHERE date(updated_at/1000,'unixepoch','localtime') = date('now','localtime')`;
+    if (!hasPeer) return db.prepare(`${sql} ORDER BY updated_at DESC`).all();
+    const peerSql = `SELECT id, objective, status, datetime(updated_at/1000,'unixepoch','localtime') as updated, updated_at FROM peer.objectives WHERE date(updated_at/1000,'unixepoch','localtime') = date('now','localtime') AND id NOT IN (SELECT id FROM objectives)`;
+    return db.prepare(`SELECT * FROM (${sql} UNION ALL ${peerSql}) ORDER BY updated_at DESC`).all();
+  }) as any[];
+
+  if (!isTTY) { console.log(JSON.stringify(rows, null, 2)); db.close(); return; }
+  if (rows.length === 0) { console.log(color.dim('No objectives updated today.')); db.close(); return; }
+  for (const r of rows) {
+    console.log(`${color.cyan(r.id.slice(0, 8))}  ${trunc(r.objective, 50)}  ${colorStatus(r.status)}  ${color.dim(r.updated)}`);
+  }
+  db.close();
+}
+
+function cmdChildren(id: string): void {
+  if (!id) {
+    console.error('Usage: aria children <id>');
+    process.exit(1);
+  }
+  const db = openDbReadonly();
+  const children = getChildrenUnified(db, id);
+
+  if (!isTTY) { console.log(JSON.stringify(children.map(c => ({ id: c.id, objective: c.objective, status: c.status, model: c.model, updated_at: c.updated_at })), null, 2)); db.close(); return; }
+  if (children.length === 0) { console.log(color.dim('No children.')); db.close(); return; }
+  for (const c of children) {
+    console.log(`${color.cyan(c.id.slice(0, 8))}  ${trunc(c.objective, 50)}  ${colorStatus(c.status)}  ${color.dim(c.model ?? '')}  ${color.dim(formatTimestamp(c.updated_at))}`);
+  }
+  db.close();
+}
+
+function cmdHistory(id: string): void {
+  if (!id) {
+    console.error('Usage: aria history <id>');
+    process.exit(1);
+  }
+  const db = openDbReadonly();
+  const rows = withPeer(db, (hasPeer) => {
+    const sql = `SELECT turn_number, session_id, cascade_id, datetime(created_at/1000,'unixepoch','localtime') as ts FROM turns WHERE objective_id = ? ORDER BY turn_number`;
+    if (!hasPeer) return db.prepare(sql).all(id);
+    const peerSql = `SELECT turn_number, session_id, cascade_id, datetime(created_at/1000,'unixepoch','localtime') as ts FROM peer.turns WHERE objective_id = ? AND id NOT IN (SELECT id FROM turns WHERE objective_id = ?) ORDER BY turn_number`;
+    return db.prepare(`SELECT * FROM (${sql} UNION ALL ${peerSql}) ORDER BY turn_number`).all(id, id, id);
+  }) as any[];
+
+  if (!isTTY) { console.log(JSON.stringify(rows, null, 2)); db.close(); return; }
+  if (rows.length === 0) { console.log(color.dim('No turns.')); db.close(); return; }
+  for (const r of rows) {
+    console.log(`  #${String(r.turn_number).padStart(3)}  session:${(r.session_id ?? '-').slice(0, 8)}  cascade:${(r.cascade_id ?? '-').slice(0, 8)}  ${color.dim(r.ts)}`);
+  }
+  db.close();
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────
@@ -1181,9 +1458,19 @@ switch (command) {
     break;
   }
 
+  case 'build': {
+    const { execSync } = await import('child_process');
+    const engineDir = decodeURIComponent(new URL('../../', import.meta.url).pathname);
+    console.log('Building engine...');
+    execSync('npm run build', { cwd: engineDir, stdio: 'inherit' });
+    console.log('Done.');
+    break;
+  }
+
   case 'up':
   case 'engine': {
-    const engineDb = initDb();
+    const engineDb = openDb();
+    migrateDb(engineDb);
     const nudge = startEngine(engineDb);
     startEmbedDaemon();
     const surfaceDist = isWorker() ? null : decodeURIComponent(new URL('../../../surface/dist', import.meta.url).pathname);
@@ -1202,6 +1489,54 @@ switch (command) {
     });
     break;
   }
+
+  case 'active':
+    cmdActive();
+    break;
+
+  case 'alive':
+    cmdAlive();
+    break;
+
+  case 'recent':
+    cmdRecent();
+    break;
+
+  case 'unprocessed':
+    cmdUnprocessed();
+    break;
+
+  case 'stuck':
+    cmdStuck();
+    break;
+
+  case 'errors':
+    cmdErrors();
+    break;
+
+  case 'waiting':
+    cmdWaiting();
+    break;
+
+  case 'cascade':
+    cmdCascade(args);
+    break;
+
+  case 'stats':
+    cmdStats();
+    break;
+
+  case 'today':
+    cmdToday();
+    break;
+
+  case 'children':
+    cmdChildren(args[0]);
+    break;
+
+  case 'history':
+    cmdHistory(args[0]);
+    break;
 
   default:
     console.error(`Unknown command: ${command}`);
