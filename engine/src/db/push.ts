@@ -1,4 +1,21 @@
-import { getCoordinatorUrl, isWorker } from './node.js';
+import { getCoordinatorUrl, isWorker, getPeerUrl } from './node.js';
+
+// ── Push to peer (coordinator→worker or worker→coordinator) ─────
+
+export function pushToPeer(payload: {
+  objectives?: Record<string, unknown>[],
+  inbox?: Record<string, unknown>[],
+}): void {
+  const url = getPeerUrl();
+  if (!url) return;
+
+  fetch(`${url}/api/sync`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(3000),
+  }).catch(() => {});
+}
 
 // ── Data sync (fire-and-forget) ──────────────────────────────────
 
@@ -7,8 +24,7 @@ export function pushSync(payload: {
   inbox?: Record<string, unknown>[],
   turns?: Record<string, unknown>[],
 }): void {
-  if (!isWorker()) return;
-  const url = getCoordinatorUrl();
+  const url = getPeerUrl();
   if (!url) return;
 
   fetch(`${url}/api/sync`, {
